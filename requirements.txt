@@ -9,4 +9,3 @@ pathlib>=1.0.1
 typing>=3.7.4
 tqdm>=4.66.0
 markdown>=3.4.0
-weasyprint>=59.0

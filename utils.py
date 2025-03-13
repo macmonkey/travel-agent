@@ -11,14 +11,16 @@ import re
 import uuid
 from typing import List, Dict, Any, Union
 
-# Try to import PDF conversion libraries
+# Import sys for module checks
+import sys
+
+# Try to import markdown for HTML generation
 try:
     import markdown
-    from weasyprint import HTML
-    PDF_EXPORT_AVAILABLE = True
+    MARKDOWN_AVAILABLE = True
 except ImportError:
-    PDF_EXPORT_AVAILABLE = False
-    print("PDF export functionality not available. Install with: pip install markdown weasyprint")
+    MARKDOWN_AVAILABLE = False
+    print("Markdown module not available. Basic HTML formatting will be used instead.")
 
 # Configure logging
 logging.basicConfig(
@@ -158,7 +160,7 @@ def format_plan_as_markdown(plan: Dict[str, Any]) -> str:
 
 def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, str]:
     """
-    Save a travel plan as both Markdown and PDF files.
+    Save a travel plan as Markdown, TXT and HTML files.
     
     Args:
         plan_text: The travel plan text
@@ -188,53 +190,66 @@ def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, 
     md_path = output_dir / f"{base_filename}.md"
     with open(md_path, 'w', encoding='utf-8') as f:
         f.write(plan_text)
+    logger.info(f"Markdown saved to {md_path}")
     
-    # Save as PDF if libraries are available
-    pdf_path = None
-    if PDF_EXPORT_AVAILABLE:
-        try:
-            # Convert Markdown to HTML
+    # Save as plain text
+    txt_path = output_dir / f"{base_filename}.txt"
+    with open(txt_path, 'w', encoding='utf-8') as f:
+        f.write(plan_text)
+    logger.info(f"Plain text saved to {txt_path}")
+    
+    # Save as HTML
+    try:
+        # Create a simple HTML version
+        if MARKDOWN_AVAILABLE:
+            # Use markdown if available
             html_content = markdown.markdown(plan_text)
-            html_styled = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <title>{destination_name}</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 2cm; }}
-                    h1 {{ color: #2c3e50; }}
-                    h2 {{ color: #3498db; border-bottom: 1px solid #eee; padding-bottom: 5px; }}
-                    h3 {{ color: #2980b9; }}
-                    li {{ margin: 5px 0; }}
-                    .header {{ text-align: center; margin-bottom: 30px; }}
-                    .footer {{ text-align: center; font-size: 0.8em; color: #7f8c8d; margin-top: 30px; }}
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h1>{destination_name}</h1>
-                    <p>Generated on {datetime.datetime.now().strftime("%d %B %Y")}</p>
-                </div>
-                {html_content}
-                <div class="footer">
-                    <p>Created with Travel Plan Agent</p>
-                </div>
-            </body>
-            </html>
-            """
-            
-            # Convert HTML to PDF
-            pdf_path = output_dir / f"{base_filename}.pdf"
-            HTML(string=html_styled).write_pdf(pdf_path)
-        except Exception as e:
-            logger.error(f"PDF generation failed: {str(e)}")
-            pdf_path = None
+        else:
+            # Simple fallback if markdown isn't available
+            html_content = plan_text.replace('\n', '<br>').replace('# ', '<h1>').replace('## ', '<h2>').replace('### ', '<h3>')
+            for heading in re.findall(r'<h[123]>(.*)', html_content):
+                html_content = html_content.replace(f'<h1>{heading}', f'<h1>{heading}</h1>')
+                html_content = html_content.replace(f'<h2>{heading}', f'<h2>{heading}</h2>')
+                html_content = html_content.replace(f'<h3>{heading}', f'<h3>{heading}</h3>')
+        
+        html_styled = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>{destination_name}</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 2cm; }}
+                h1 {{ color: #2c3e50; }}
+                h2 {{ color: #3498db; border-bottom: 1px solid #eee; padding-bottom: 5px; }}
+                h3 {{ color: #2980b9; }}
+                li {{ margin: 5px 0; }}
+            </style>
+        </head>
+        <body>
+            <h1>{destination_name}</h1>
+            <p>Generated on {datetime.datetime.now().strftime("%d %B %Y")}</p>
+            {html_content}
+            <p style="text-align: center; margin-top: 30px; font-size: 0.8em; color: #7f8c8d;">
+                Created with Travel Plan Agent
+            </p>
+        </body>
+        </html>
+        """
+        
+        html_path = output_dir / f"{base_filename}.html"
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(html_styled)
+        logger.info(f"HTML saved to {html_path}")
+    except Exception as e:
+        logger.error(f"HTML generation failed: {str(e)}")
+        html_path = None
     
     # Return paths
     result = {
         "markdown": str(md_path),
-        "pdf": str(pdf_path) if pdf_path else None
+        "txt": str(txt_path),
+        "html": str(html_path) if 'html_path' in locals() and html_path and html_path.exists() else None
     }
     
     logger.info(f"Travel plan saved as: {result}")

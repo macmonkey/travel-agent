@@ -24,6 +24,14 @@ Der Reiseplan-Agent nutzt:
    GEMINI_API_KEY=dein-api-key-hier
    ```
 
+# Exportformate
+
+Die Reisepläne werden in folgenden Formaten gespeichert:
+
+1. **Markdown (.md)** - Ideal für die Anzeige auf GitHub oder in Markdown-Viewern
+2. **Text (.txt)** - Einfaches Textformat für universelle Kompatibilität
+3. **HTML (.html)** - Für die Anzeige im Browser mit schöner Formatierung
+
 ## Nutzung
 
 1. Reisedokumente (PDFs, DOCs) in den Ordner `data/documents` legen
@@ -35,6 +43,8 @@ Der Reiseplan-Agent nutzt:
 
 3. Reisewunsch eingeben und den Anweisungen folgen
 
+4. Die generierten Reisepläne werden im Ordner `output` gespeichert (als Markdown, und wenn verfügbar als PDF)
+
 ## Funktionen
 
 - Verarbeitung von PDFs und DOC/DOCX-Dokumenten
@@ -42,6 +52,7 @@ Der Reiseplan-Agent nutzt:
 - Generierung eines Reiseplan-Entwurfs
 - Feedback-Integration
 - Erstellung eines detaillierten Reiseplans
+- Speicherung der Reisepläne als Markdown und PDF (optional)
 
 ## Projektstruktur
 
@@ -52,6 +63,8 @@ Der Reiseplan-Agent nutzt:
 - `agent.py`: KI-Agent mit Gemini-Integration
 - `prompts.py`: Prompt-Templates
 - `utils.py`: Hilfsfunktionen
+- `data/documents/`: Speicherort für Quelldokumente
+- `output/`: Speicherort für generierte Reisepläne
 
 ## Erste Schritte
 
