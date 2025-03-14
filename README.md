@@ -30,7 +30,6 @@ Die Reisepläne werden in folgenden Formaten gespeichert:
 
 1. **Markdown (.md)** - Ideal für die Anzeige auf GitHub oder in Markdown-Viewern
 2. **Text (.txt)** - Einfaches Textformat für universelle Kompatibilität
-3. **HTML (.html)** - Für die Anzeige im Browser mit schöner Formatierung
 
 ## Nutzung
 

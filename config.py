@@ -40,6 +40,13 @@ class Config:
         self.TOP_K = 40
         self.TOP_P = 0.95
         
+        # API usage optimization
+        self.SKIP_METADATA_GENERATION = False  # Set to True to reduce API calls by 20%
+        self.OPTIMIZE_KEYWORD_EXTRACTION = False  # Set to True to skip second keyword extraction API call
+        self.SKIP_DRAFT_PLAN = False  # Set to True to skip draft plan and go directly to detailed plan
+        self.USE_CACHED_KEYWORDS = True  # Use cached keywords for similar queries
+        self.OFFLINE_MODE = False  # Set to True to skip all rate limiting (dangerous!)
+        
         # Validate required environment variables
         self._validate_config()
     

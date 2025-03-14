@@ -11,16 +11,8 @@ import re
 import uuid
 from typing import List, Dict, Any, Union
 
-# Import sys for module checks
+# Import required modules
 import sys
-
-# Try to import markdown for HTML generation
-try:
-    import markdown
-    MARKDOWN_AVAILABLE = True
-except ImportError:
-    MARKDOWN_AVAILABLE = False
-    print("Markdown module not available. Basic HTML formatting will be used instead.")
 
 # Configure logging
 logging.basicConfig(
@@ -160,7 +152,7 @@ def format_plan_as_markdown(plan: Dict[str, Any]) -> str:
 
 def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, str]:
     """
-    Save a travel plan as Markdown, TXT and HTML files.
+    Save a travel plan as Markdown and TXT files.
     
     Args:
         plan_text: The travel plan text
@@ -173,18 +165,62 @@ def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, 
     output_dir = Path("./output")
     output_dir.mkdir(exist_ok=True)
     
-    # Generate a filename based on destination and date
-    if not destination_name:
-        destination_match = re.search(r"# ([^#\n]+)", plan_text)
-        if destination_match:
-            destination_name = destination_match.group(1).strip()
-        else:
-            destination_name = "Travel Plan"
+    # Extract plan title for the filename
+    # First try to extract a creative title (if it exists)
+    title_match = re.search(r"^# (.+)$", plan_text, re.MULTILINE)
+    if title_match:
+        raw_title = title_match.group(1).strip()
+        # Remove any metadata markers from the title
+        raw_title = re.sub(r'PLAN_METADATA__ANALYSIS', '', raw_title)
+    else:
+        # Fall back to destination name
+        if not destination_name:
+            destination_match = re.search(r"# ([^#\n]+)", plan_text)
+            if destination_match:
+                destination_name = destination_match.group(1).strip()
+            else:
+                destination_name = "Travel Plan"
+        raw_title = destination_name
     
-    # Clean filename
-    clean_name = re.sub(r'[^\w\s-]', '', destination_name).strip().replace(' ', '_')
+    # Look for potential itinerary type info in the title or text
+    days_prefix = ""
+    if "days" in plan_text.lower() or "day" in plan_text.lower():
+        # Try to extract number of days from text
+        days_match = re.search(r'(\d+)[\s-]*day', plan_text.lower())
+        if days_match:
+            days = days_match.group(1)
+            days_prefix = f"{days} Days - "
+    
+    # Extract country/region information if possible
+    countries = []
+    for country in ["Vietnam", "Thailand", "Japan", "China", "Bali", "Indonesia", 
+                   "Malaysia", "Singapore", "Laos", "Cambodia", "Asia", "Europe"]:
+        if country.lower() in plan_text.lower() or country.lower() in raw_title.lower():
+            countries.append(country)
+    
+    # Create a descriptive plan title
+    plan_title = raw_title
+    if not any(country in plan_title for country in countries) and countries:
+        # Add country to title if not already there
+        countries_text = " & ".join(countries[:2])  # Limit to 2 countries
+        plan_title = f"{countries_text}: {plan_title}"
+    
+    # Clean and format the title
+    plan_title = plan_title.replace("PLAN_METADATA__ANALYSIS", "").strip()
+    plan_title = re.sub(r'\s+', ' ', plan_title)  # Remove extra spaces
+    
+    # Clean the title for filename use (more aggressively)
+    clean_title = re.sub(r'[^\w\s-]', '', plan_title).strip().replace(' ', '_')
+    
+    # Limit title length for filename
+    if len(clean_title) > 40:
+        clean_title = clean_title[:40]
+    
+    # Add date
     date_str = datetime.datetime.now().strftime("%Y%m%d")
-    base_filename = f"{clean_name}_{date_str}"
+    
+    # Construct a cleaner base filename
+    base_filename = f"{days_prefix}{clean_title}_{date_str}"
     
     # Save as Markdown
     md_path = output_dir / f"{base_filename}.md"
@@ -198,61 +234,24 @@ def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, 
         f.write(plan_text)
     logger.info(f"Plain text saved to {txt_path}")
     
-    # Save as HTML
-    try:
-        # Create a simple HTML version
-        if MARKDOWN_AVAILABLE:
-            # Use markdown if available
-            html_content = markdown.markdown(plan_text)
-        else:
-            # Simple fallback if markdown isn't available
-            html_content = plan_text.replace('\n', '<br>').replace('# ', '<h1>').replace('## ', '<h2>').replace('### ', '<h3>')
-            for heading in re.findall(r'<h[123]>(.*)', html_content):
-                html_content = html_content.replace(f'<h1>{heading}', f'<h1>{heading}</h1>')
-                html_content = html_content.replace(f'<h2>{heading}', f'<h2>{heading}</h2>')
-                html_content = html_content.replace(f'<h3>{heading}', f'<h3>{heading}</h3>')
-        
-        html_styled = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>{destination_name}</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 2cm; }}
-                h1 {{ color: #2c3e50; }}
-                h2 {{ color: #3498db; border-bottom: 1px solid #eee; padding-bottom: 5px; }}
-                h3 {{ color: #2980b9; }}
-                li {{ margin: 5px 0; }}
-            </style>
-        </head>
-        <body>
-            <h1>{destination_name}</h1>
-            <p>Generated on {datetime.datetime.now().strftime("%d %B %Y")}</p>
-            {html_content}
-            <p style="text-align: center; margin-top: 30px; font-size: 0.8em; color: #7f8c8d;">
-                Created with Travel Plan Agent
-            </p>
-        </body>
-        </html>
-        """
-        
-        html_path = output_dir / f"{base_filename}.html"
-        with open(html_path, 'w', encoding='utf-8') as f:
-            f.write(html_styled)
-        logger.info(f"HTML saved to {html_path}")
-    except Exception as e:
-        logger.error(f"HTML generation failed: {str(e)}")
-        html_path = None
-    
-    # Return paths
+    # Return paths with additional metadata
     result = {
         "markdown": str(md_path),
         "txt": str(txt_path),
-        "html": str(html_path) if 'html_path' in locals() and html_path and html_path.exists() else None
+        "title": plan_title,
+        "days": days_prefix.replace(" Days - ", "") if days_prefix else None,
+        "countries": countries,
+        "filename": base_filename
     }
     
-    logger.info(f"Travel plan saved as: {result}")
+    # Log a nice summary
+    logger.info(f"Travel plan saved as: {result['markdown']} and {result['txt']}")
+    logger.info(f"Plan title: {plan_title}")
+    if countries:
+        logger.info(f"Countries: {', '.join(countries)}")
+    if days_prefix:
+        logger.info(f"Duration: {days_prefix}")
+    
     return result
 
 def estimate_reading_time(text: str) -> int:
