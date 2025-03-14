@@ -46,6 +46,7 @@ class Config:
         self.SKIP_DRAFT_PLAN = False  # Set to True to skip draft plan and go directly to detailed plan
         self.USE_CACHED_KEYWORDS = True  # Use cached keywords for similar queries
         self.OFFLINE_MODE = False  # Set to True to skip all rate limiting (dangerous!)
+        self.USE_CHAT_MODE = False  # Set to True to use chat-based plan generation
         
         # Validate required environment variables
         self._validate_config()
@@ -56,6 +57,18 @@ class Config:
             print("WARNING: GEMINI_API_KEY environment variable is not set.")
             print("Please set it in the .env file or using: export GEMINI_API_KEY='your-api-key'")
             print(f"Remember to place your travel documents in: {self.DOCUMENTS_PATH}")
+            
+        # Check Google Generative AI library version
+        try:
+            import google.generativeai as genai
+            version = genai.__version__
+            if version < "0.8.4" and self.USE_CHAT_MODE:
+                print(f"\nWARNING: Your google-generativeai version ({version}) may not fully support chat mode features.")
+                print("For best results with chat mode, please update to version 0.8.4 or higher:")
+                print("pip install --upgrade google-generativeai>=0.8.4")
+                print("For now, a compatibility mode will be used.")
+        except (ImportError, AttributeError):
+            pass
     
     def __str__(self):
         """Return a string representation of the configuration."""

@@ -35,6 +35,9 @@ class TravelAgent:
         self.response_cache = {}
         self.cache_enabled = True  # Can be toggled if needed
         
+        # API call tracking
+        self.api_call_counter = 0
+        
         # Create a cache config file to store metadata
         self.cache_config_path = self.cache_dir / "cache_config.json"
         if not self.cache_config_path.exists():
@@ -47,14 +50,14 @@ class TravelAgent:
         
         # Rate limiting settings
         self.last_api_call = 0
-        self.min_delay_between_calls = 3.0  # Minimum 3 seconds between calls (increased from 1s)
-        self.jitter = 1.0  # Add up to 1 second of random jitter (increased from 0.5s)
+        self.min_delay_between_calls = 0.5  # Reduced to 0.5 seconds for faster generation
+        self.jitter = 0.2  # Reduced jitter to 0.2 seconds
         self.consecutive_errors = 0
-        self.backoff_factor = 2  # Exponential backoff factor
-        self.max_retries = 5  # Increased from 3 to handle more retries
+        self.backoff_factor = 2  # Exponential backoff factor stays the same
+        self.max_retries = 5  # Keep the same number of retries
         self.batch_counter = 0  # Counter for batch processing
-        self.batch_size = 5  # After this many requests, take a longer pause
-        self.batch_pause = 15.0  # Seconds to pause after batch_size requests
+        self.batch_size = 10  # Increased to 10 requests before pause
+        self.batch_pause = 5.0  # Reduced pause to 5 seconds
         
         # Configure Google Gemini API
         genai.configure(api_key=self.config.GEMINI_API_KEY)
@@ -69,6 +72,21 @@ class TravelAgent:
                 "top_k": self.config.TOP_K
             }
         )
+        
+        # Create a chat model for continuous conversations
+        # Use slightly higher temperature for more creative and descriptive travel plans
+        self.chat_model = genai.GenerativeModel(
+            model_name=self.config.GEMINI_MODEL,
+            generation_config={
+                "max_output_tokens": self.config.MAX_TOKENS,
+                "temperature": 0.8,  # Higher temperature for more creative descriptions
+                "top_p": 0.95,
+                "top_k": 40
+            }
+        )
+        
+        # Dictionary to store active chat sessions
+        self.active_chats = {}
         
         # Create a more factual model for keyword extraction with lower temperature
         self.keyword_model = genai.GenerativeModel(
@@ -197,10 +215,10 @@ class TravelAgent:
         now = time.time()
         time_since_last_call = now - self.last_api_call
         
-        # In offline/super-minimal mode, skip all rate limiting
+        # In offline/super-minimal mode, skip all rate limiting completely
         if hasattr(self.config, 'OFFLINE_MODE') and self.config.OFFLINE_MODE:
             self.logger.info("Running in offline mode - skipping all rate limiting")
-            # Skip all delays completely
+            # Skip all delays completely - don't even increment counters
         else:
             # Increment batch counter and check if we need a longer pause
             self.batch_counter += 1
@@ -233,6 +251,10 @@ class TravelAgent:
         try:
             self.last_api_call = time.time()  # Update the timestamp before the call
             self.logger.info(f"Making API call (batch request {self.batch_counter}/{self.batch_size})")
+            
+            # Increment the API call counter
+            self.api_call_counter += 1
+            
             response = model.generate_content(prompt)
             
             # Success! Reset consecutive errors but keep batch counter
@@ -281,6 +303,113 @@ class TravelAgent:
                 # If it's not a rate limit error, re-raise it
                 raise
                 
+    def create_chat_session(self, session_id=None):
+        """
+        Create a new chat session with the model.
+        
+        Args:
+            session_id: Optional custom session ID (if None, a new ID will be generated)
+            
+        Returns:
+            session_id: The ID of the created session
+        """
+        if session_id is None:
+            # Generate a unique session ID
+            session_id = f"session_{int(time.time())}_{random.randint(1000, 9999)}"
+            
+        # Create a new chat session
+        self.active_chats[session_id] = self.chat_model.start_chat(
+            history=[]
+        )
+        
+        self.logger.info(f"Created new chat session with ID: {session_id}")
+        return session_id
+    
+    def add_to_chat(self, session_id, message, role="user"):
+        """
+        Add a message to an existing chat session.
+        
+        Args:
+            session_id: The ID of the chat session
+            message: The message to add
+            role: The role of the message sender ('user' or 'model')
+            
+        Returns:
+            None
+        """
+        if session_id not in self.active_chats:
+            self.logger.warning(f"Chat session {session_id} does not exist. Creating a new one.")
+            self.create_chat_session(session_id)
+            
+        # Add the message to the chat history
+        chat = self.active_chats[session_id]
+        chat.history.append({"role": role, "parts": [message]})
+        
+    def get_chat_response(self, session_id, message=None):
+        """
+        Get a response from the model in an existing chat session.
+        
+        Args:
+            session_id: The ID of the chat session
+            message: Optional new message to add to the chat
+            
+        Returns:
+            The model's response
+        """
+        if session_id not in self.active_chats:
+            self.logger.warning(f"Chat session {session_id} does not exist. Creating a new one.")
+            self.create_chat_session(session_id)
+            
+        chat = self.active_chats[session_id]
+        
+        # Add the new message if provided
+        if message:
+            self.add_to_chat(session_id, message)
+        
+        # Apply rate limiting if not in offline mode
+        now = time.time()
+        time_since_last_call = now - self.last_api_call
+        
+        if not (hasattr(self.config, 'OFFLINE_MODE') and self.config.OFFLINE_MODE):
+            # Apply rate limiting (similar to _rate_limited_generate but simplified)
+            if time_since_last_call < self.min_delay_between_calls:
+                sleep_time = self.min_delay_between_calls - time_since_last_call
+                self.logger.info(f"Rate limiting: Waiting {sleep_time:.2f}s before next chat API call")
+                time.sleep(sleep_time)
+        
+        # Make the API call
+        self.last_api_call = time.time()
+        self.logger.info(f"Sending message to chat session {session_id}")
+        
+        try:
+            # Since we already added the message to history, we need to send a non-empty message
+            # to trigger the model to generate a response
+            response = chat.send_message("Please continue with the travel plan.")
+            self.consecutive_errors = 0      # Reset error counter on success
+            
+            # Add the model's response to the chat history
+            self.add_to_chat(session_id, response.text, role="model")
+            
+            return response.text
+            
+        except Exception as e:
+            self.consecutive_errors += 1
+            self.logger.error(f"Error in chat session: {e}")
+            
+            # If it looks like a rate limit issue
+            if "429" in str(e) or "quota" in str(e).lower() or "rate" in str(e).lower():
+                self.logger.warning(f"Rate limit exceeded in chat session. Backing off.")
+                time.sleep(self.min_delay_between_calls * (self.backoff_factor ** self.consecutive_errors))
+                
+                # Try once more after backoff
+                try:
+                    response = chat.send_message("Please continue with the travel plan.")
+                    return response.text
+                except:
+                    return "I encountered an error due to rate limits. Please try again in a moment."
+            
+            return f"An error occurred: {str(e)}"
+    
     def _fallback_generate(self, prompt):
         """
         A simple fallback generator when the Gemini API is unavailable.
@@ -488,10 +617,26 @@ Return ONLY a valid JSON object, nothing else.
             
             # Convert the response to a dictionary
             import json
-            keywords = json.loads(keywords_text)
             
-            print(f"Extracted keywords: {keywords}")
-            return keywords
+            # Clean the response text to ensure it's valid JSON
+            # Remove any leading/trailing whitespace, markdown formatting, etc.
+            cleaned_text = keywords_text.strip()
+            
+            # If the text is wrapped in ```json and ``` markers, extract just the JSON part
+            if cleaned_text.startswith("```json") and "```" in cleaned_text[7:]:
+                cleaned_text = cleaned_text[7:].split("```", 1)[0].strip()
+            elif cleaned_text.startswith("```") and cleaned_text.endswith("```"):
+                cleaned_text = cleaned_text[3:-3].strip()
+                
+            # Try to parse the JSON
+            try:
+                keywords = json.loads(cleaned_text)
+                print(f"Extracted keywords: {keywords}")
+                return keywords
+            except json.JSONDecodeError as json_err:
+                print(f"JSON parsing error: {json_err}")
+                self.logger.warning(f"Error parsing keywords JSON: {json_err}. Falling back to basic keywords.")
+                raise  # Re-raise to trigger the fallback
             
         except Exception as e:
             print(f"Error extracting keywords: {e}")
@@ -716,6 +861,423 @@ Return ONLY a valid JSON object, nothing else.
         
         return metadata
     
+    def generate_travel_plan_chat(self, user_query: str) -> str:
+        """
+        Generate a complete travel plan using a single chat session.
+        
+        Args:
+            user_query: User's travel plan request
+            
+        Returns:
+            Completed travel plan as a string
+        """
+        print("Starting multi-section travel plan generation...")
+        
+        # Initialize tracking variables
+        start_time = time.time()
+        api_calls_start = self.api_call_counter if hasattr(self, 'api_call_counter') else 0
+        self.api_call_counter = api_calls_start if hasattr(self, 'api_call_counter') else 0
+        section_timings = {}
+        
+        # Step 1: Extract search keywords from the user query to find relevant context
+        search_keywords = self.extract_search_keywords(user_query)
+        
+        # Step 2: Retrieve relevant context from the database
+        context = self.rag_db.get_relevant_context_with_llm_keywords(
+            user_query, 
+            search_keywords, 
+            n_results=5
+        )
+        
+        # Step 3: Get sources for attribution
+        sources = self.rag_db.get_source_documents_with_llm_keywords(
+            user_query,
+            search_keywords,
+            n_results=5
+        )
+        source_text = "\n".join([f"- {source}" for source in sources])
+        
+        # NEW APPROACH: Generate travel plan in sections to avoid placeholder references
+        
+        # Start tracking section timing
+        section_start = time.time()
+        
+        # First run a quick check to ensure we're addressing the user's request properly
+        request_analysis_prompt = f"""
+You are an expert travel planner. Analyze this travel request CAREFULLY:
+
+"{user_query}"
+
+Before creating a travel plan, ANALYZE:
+1. The exact type of trip requested (party, relaxation, cultural, etc.)
+2. Specific destinations mentioned or requested
+3. Specific activities mentioned or requested 
+4. Timeline/duration specifications
+5. Any special requirements or preferences
+6. Any logistical challenges that need addressing
+
+This is CRUCIAL: If the user has requested a very specific type of trip (e.g., "party trip visiting a new city every day"), 
+you MUST honor this request EXACTLY, even if it's logistically challenging or unusual.
+
+Provide a brief analysis of what a SUITABLE travel plan would include to meet the user's exact request.
+"""
+        
+        # Analyze the request to make sure we're on track
+        request_analysis = self._rate_limited_generate(self.model, request_analysis_prompt).text
+        section_timings['request_analysis'] = time.time() - section_start
+        section_start = time.time()
+        
+        # 1. Then generate the main travel plan with this analysis in mind
+        basic_prompt = f"""
+You are an expert travel planner creating a detailed travel plan based on this request: "{user_query}"
+
+IMPORTANT ANALYSIS OF THE REQUEST:
+{request_analysis}
+
+Here is relevant travel information from our database:
+{context}
+
+Available sources:
+{source_text}
+
+Create a detailed, inspiring travel plan with these elements ONLY:
+1. A creative title for the plan that PRECISELY reflects what the user asked for
+2. Original request recap
+3. Executive summary (brief overview) that shows you TRULY understand their specific request
+4. Daily itinerary with VIVID, INSPIRING descriptions - make this section detailed and engaging!
+   - If the user requested specific types of activities (e.g., partying, cultural visits), FOCUS on those
+   - If the user requested a specific pace (e.g., new city every day), STRICTLY follow this
+5. Conclusion
+
+For each recommendation, clearly indicate if it's [FROM DATABASE] or [EXTERNAL SUGGESTION].
+Make your descriptions highly vivid and engaging - use sensory details to bring the experience to life.
+
+CRITICAL: ENSURE your plan PRECISELY matches the user's request - even if it's unusual or challenging.
+"""
+        
+        # Generate the basic travel plan using standard rate-limited generation
+        basic_plan = self._rate_limited_generate(self.model, basic_prompt).text
+        section_timings['basic_plan'] = time.time() - section_start
+        section_start = time.time()
+        
+        # 2. Now generate the accommodations section
+        accommodations_prompt = f"""
+Based on this travel plan:
+{basic_plan[:2000]}... (plan continues)
+
+User's original request: "{user_query}"
+Analysis of request: "{request_analysis}"
+
+And using this travel database information:
+{context}
+
+Create ONLY a detailed "ACCOMMODATIONS" section listing accommodations appropriate for this trip.
+
+IMPORTANT: 
+- If the user's plan involves rapid movement (e.g., new city every day), suggest PRACTICAL accommodations
+- If the user specifically mentioned party hostels, luxury hotels, or any particular accommodation style, PRIORITIZE those
+- If the trip is focused on nightlife/parties, suggest accommodations close to nightlife areas
+- Be REALISTIC about check-in/check-out times given the travel schedule
+- If staying in a city for less than 24 hours, mention alternatives like airport sleeping pods or day-use hotels if appropriate
+
+For each accommodation:
+- Name and description
+- Price range (if available)
+- Special features (especially those relevant to the trip type)
+- Proximity to main attractions/nightlife if relevant
+- Mark each as [FROM DATABASE] or [EXTERNAL SUGGESTION]
+
+DO NOT reference any "previous responses" - include ALL accommodation details directly.
+Make descriptions vivid and appealing.
+"""
+        
+        accommodations_section = self._rate_limited_generate(self.model, accommodations_prompt).text
+        section_timings['accommodations'] = time.time() - section_start
+        section_start = time.time()
+        
+        # 3. Now generate the activities section
+        activities_prompt = f"""
+Based on this travel plan:
+{basic_plan[:2000]}... (plan continues)
+
+And using this travel database information:
+{context}
+
+Create ONLY a detailed "ACTIVITIES & ATTRACTIONS" section listing the main activities from the plan.
+For each activity:
+- Name and vivid description
+- Practical visiting information
+- Why it's worth experiencing
+- Mark each as [FROM DATABASE] or [EXTERNAL SUGGESTION]
+
+DO NOT reference any "previous responses" - include ALL activity details directly.
+Make descriptions vivid and compelling.
+"""
+        
+        activities_section = self._rate_limited_generate(self.model, activities_prompt).text
+        section_timings['activities'] = time.time() - section_start
+        section_start = time.time()
+        
+        # 4. Generate transportation details
+        transport_prompt = f"""
+Based on this travel plan:
+{basic_plan[:2000]}... (plan continues)
+
+User's original request: "{user_query}"
+Analysis of request: "{request_analysis}"
+
+And using this travel database information:
+{context}
+
+Create ONLY a detailed "TRANSPORTATION DETAILS" section including:
+
+CRITICAL CONSIDERATIONS:
+- If the user's plan involves rapid movement (e.g., new city every day), provide REALISTIC transportation options
+- VERIFY TRAVEL TIMES carefully - can the user actually make these connections?
+- Include specific flight routes/times if rapid international travel is involved
+- For nightlife-focused trips, include late-night transportation options
+- Be explicit about total travel time between destinations (including airport transfers, wait times, etc.)
+
+Include:
+- How to travel between each destination with SPECIFIC options (not just "by plane")
+- REALISTIC flight routes and connection times for international travel
+- Options for local transportation at each destination
+- Estimated costs and durations for ALL transportation
+- Practical tips related to transportation logistics
+
+DO NOT reference any "previous responses" - include ALL transportation details directly.
+If there are any logistical IMPOSSIBILITIES in the plan, clearly flag them!
+"""
+        
+        transport_section = self._rate_limited_generate(self.model, transport_prompt).text
+        section_timings['transport'] = time.time() - section_start
+        section_start = time.time()
+        
+        # 5. Generate dining recommendations
+        dining_prompt = f"""
+Based on this travel plan:
+{basic_plan[:2000]}... (plan continues)
+
+Create ONLY a detailed "DINING RECOMMENDATIONS" section including:
+- Notable restaurants or food experiences for each location
+- Local specialties to try
+- Price ranges
+- Mark each as [FROM DATABASE] or [EXTERNAL SUGGESTION]
+
+DO NOT reference any "previous responses" - include ALL dining details directly.
+Make descriptions appetizing and sensory-rich.
+"""
+        
+        dining_section = self._rate_limited_generate(self.model, dining_prompt).text
+        section_timings['dining'] = time.time() - section_start
+        section_start = time.time()
+        
+        # 6. Generate budget breakdown
+        budget_prompt = f"""
+Based on this travel plan:
+{basic_plan[:2000]}... (plan continues)
+
+Create ONLY a detailed "ESTIMATED BUDGET BREAKDOWN" section including:
+- Accommodation costs
+- Transportation costs
+- Food and dining costs
+- Activities and entrance fees
+- Miscellaneous expenses
+- Overall budget range
+
+Present this as a clear, itemized breakdown with specific numbers.
+DO NOT reference any "previous responses" - include ALL budget details directly.
+"""
+        
+        budget_section = self._rate_limited_generate(self.model, budget_prompt).text
+        section_timings['budget'] = time.time() - section_start
+        section_start = time.time()
+        
+        # 7. Generate practical tips
+        tips_prompt = f"""
+Based on this travel plan:
+{basic_plan[:2000]}... (plan continues)
+
+Create ONLY a detailed "PRACTICAL TIPS" section including:
+- Packing suggestions
+- Cultural norms and etiquette
+- Health and safety advice
+- Best times to visit
+- Language tips
+- Other practical considerations
+
+Make these tips specific to the destinations in the plan.
+DO NOT reference any "previous responses" - include ALL practical tips directly.
+"""
+        
+        tips_section = self._rate_limited_generate(self.model, tips_prompt).text
+        section_timings['tips'] = time.time() - section_start
+        section_start = time.time()
+        
+        # 8. Generate sources section
+        sources_prompt = f"""
+Based on this travel plan and the following sources:
+{source_text}
+
+Create ONLY a detailed "SOURCES" section that:
+- Lists all database documents used
+- For each major recommendation, notes whether it came from the database or is an external suggestion
+- If external suggestions were used, explains why
+
+DO NOT reference any "previous responses" - include ALL source information directly.
+"""
+        
+        sources_section = self._rate_limited_generate(self.model, sources_prompt).text
+        section_timings['sources'] = time.time() - section_start
+        section_start = time.time()
+        
+        # Combine all sections into one complete travel plan
+        complete_plan = f"""
+{basic_plan}
+
+## Detailed Accommodations
+{accommodations_section}
+
+## Activities & Attractions
+{activities_section}
+
+## Transportation Details
+{transport_section}
+
+## Dining Recommendations
+{dining_section}
+
+## Estimated Budget Breakdown
+{budget_section}
+
+## Practical Tips
+{tips_section}
+
+## Sources
+{sources_section}
+"""
+
+        # Run a plausibility check on the generated plan
+        plausibility_prompt = f"""
+Analyze this travel plan:
+{complete_plan[:3000]}... (plan continues)
+
+Original user request: "{user_query}"
+
+Perform a CRITICAL plausibility check on this travel plan:
+
+1. Does the plan DIRECTLY address what the user asked for? (Yes/No)
+2. If not, what specific aspects of the user's request were missed?
+3. Is the itinerary logically coherent? (e.g., is the travel sequence sensible?)
+4. Are there any logistical impossibilities? (e.g., unrealistic travel times)
+5. Does the plan recommend appropriate accommodations based on the trip style?
+6. Overall plausibility rating (1-10)
+
+Based on your analysis, create a "PLAUSIBILITY CHECK" section with your findings.
+If the plan scores below 7/10, provide a specific recommendation on how to fix the major issues.
+"""
+        
+        try:
+            plausibility_check = self._rate_limited_generate(self.model, plausibility_prompt).text
+            section_timings['plausibility_check'] = time.time() - section_start
+            section_start = time.time()
+            
+            # Add the plausibility check to the complete plan
+            complete_plan = f"{complete_plan}\n\n## PLAUSIBILITY CHECK\n{plausibility_check}"
+        except Exception as e:
+            self.logger.error(f"Error generating plausibility check: {str(e)}")
+            # Add a simplified note if the check fails
+            complete_plan = f"{complete_plan}\n\n## PLAUSIBILITY CHECK\nUnable to generate plausibility check due to an error."
+        
+        # Generate metadata if needed
+        if not hasattr(self.config, 'SKIP_METADATA_GENERATION') or not self.config.SKIP_METADATA_GENERATION:
+            try:
+                # Generate the metadata analysis
+                metadata_prompt = f"""
+Analyze this complete travel plan:
+{complete_plan[:3000]}... (plan continues)
+
+Create a comprehensive "PLAN METADATA & ANALYSIS" section that includes:
+
+1. DATABASE UTILIZATION
+   - CRITICAL ANALYSIS: How closely does the travel plan follow information from the database?
+   - EXACT percentage (0-100%) of plan content from database vs. external knowledge
+   - Breakdown table showing sources for each major recommendation
+
+2. SOURCES ANALYSIS
+   - Comprehensive list of all sources used
+   - For EACH major recommendation, its specific source
+
+3. PLAN CLASSIFICATION
+   - Type of travel (adventure, relaxation, cultural, etc.)
+   - Target budget level (budget, mid-range, luxury)
+   - Accessibility level
+   - Target audience (families, couples, solo travelers)
+   - Intensity level (1-5 scale)
+
+4. PLAN EVALUATION
+   - Detailed strengths analysis
+   - Potential weaknesses
+   - Overall rating (1-5 stars with justification)
+
+5. IMPROVEMENT OPPORTUNITIES
+   - Specific aspects needing enhancement
+   - Missing elements that would improve the plan
+   - Additional information needed
+
+DO NOT use placeholders or abbreviate your analysis.
+"""
+                
+                metadata_section = self._rate_limited_generate(self.model, metadata_prompt).text
+                section_timings['metadata'] = time.time() - section_start
+                section_start = time.time()
+                
+                # Add metadata to the complete plan
+                complete_plan = f"{complete_plan}\n\n{'-'*80}\n\n# PLAN METADATA & ANALYSIS\n\n{metadata_section}"
+                
+            except Exception as e:
+                self.logger.error(f"Error generating metadata: {str(e)}")
+                # Add simplified metadata section in case of error
+                complete_plan = f"{complete_plan}\n\n{'-'*80}\n\n# PLAN METADATA & ANALYSIS\n\nUnable to generate detailed metadata. This plan was created based on available travel information."
+        
+        # Calculate performance metrics
+        total_time = time.time() - start_time
+        total_api_calls = self.api_call_counter - api_calls_start
+        
+        # Create a performance report with a nice table
+        
+        # Create a section timing table
+        timing_rows = []
+        for section, seconds in section_timings.items():
+            percent = (seconds / total_time) * 100
+            bars = "█" * int(percent / 5)  # Visual bar chart (1 bar = 5%)
+            timing_rows.append(f"| {section:20} | {seconds:6.1f}s | {percent:5.1f}% | {bars} |")
+        
+        timing_table = "\n".join(timing_rows)
+        
+        performance_report = f"""
+{'-'*80}
+
+# 📊 PERFORMANCE REPORT
+
+## ⏱️ Generation Performance
+- **Total Generation Time:** {total_time/60:.2f} minutes ({total_time:.1f} seconds)
+- **API Calls Made:** {total_api_calls}
+- **Average Time Per API Call:** {total_time/total_api_calls:.2f} seconds
+
+## 📋 Section Timing Breakdown
+| Section              | Time    | % Total | Visualization        |
+|----------------------|---------|---------|----------------------|
+{timing_table}
+
+{'-'*80}
+"""
+        
+        # Add the performance report at the very end
+        complete_plan = f"{complete_plan}\n\n{performance_report}"
+        
+        return complete_plan
+        
     def validate_plan(self, plan: str) -> bool:
         """
         Validate the plausibility of a generated travel plan.

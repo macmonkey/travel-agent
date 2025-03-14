@@ -111,6 +111,8 @@ def parse_arguments():
                           help='Use absolute minimal API calls (2 calls only)')
     api_group.add_argument('--offline-mode', action='store_true',
                           help='Skip ALL rate limiting and delays (dangerous, use only when you have private API)')
+    api_group.add_argument('--chat-mode', action='store_true',
+                          help='Use chat-based plan generation (single API session, greatly reduces rate limit issues)')
     api_group.add_argument('--api-quota', type=int, metavar='NUM',
                           help='Set approximate number of API calls allowed (reduces features for lower values)')
     
@@ -186,6 +188,19 @@ def main():
         print_with_typing_effect(f"Setting batch pause to {args.batch_pause}s", speed=0.01)
         
     # Handle API optimization options
+    if args.chat_mode:
+        # Chat mode - use chat-based plan generation
+        config.USE_CHAT_MODE = True
+        print_with_typing_effect("🌟 ADVANCED MODE ENABLED: Using multi-section plan generation", 
+                             speed=0.01, color=Colors.GREEN + Colors.BOLD)
+        print_with_typing_effect("    - Generates each section independently for maximum detail", speed=0.01, color=Colors.GREEN)
+        print_with_typing_effect("    - Produces vivid, inspiring travel descriptions", speed=0.01, color=Colors.GREEN)
+        print_with_typing_effect("    - Creates comprehensive, detailed itineraries", speed=0.01, color=Colors.GREEN)
+        print_with_typing_effect("    - NO placeholder references or missing sections", speed=0.01, color=Colors.GREEN)
+        print_with_typing_effect("    - Includes rich metadata with percentage analysis", speed=0.01, color=Colors.GREEN)
+        print_with_typing_effect("    - Advanced evaluation and recommendations", speed=0.01, color=Colors.GREEN)
+        print_with_typing_effect("    - NEW: Plausibility check to verify plan logic and request matching", speed=0.01, color=Colors.YELLOW + Colors.BOLD)
+    
     if args.offline_mode:
         # Offline mode - aggressively skip all rate limiting
         config.OFFLINE_MODE = True
@@ -292,6 +307,10 @@ def main():
             print_with_typing_effect(f"  OFFLINE MODE: {'Enabled' if config.OFFLINE_MODE else 'Disabled'}", 
                                 speed=0.01, color=Colors.RED + Colors.BOLD)
         
+        if hasattr(config, 'USE_CHAT_MODE') and config.USE_CHAT_MODE:
+            print_with_typing_effect(f"  CHAT MODE: {'Enabled' if config.USE_CHAT_MODE else 'Disabled'}", 
+                                speed=0.01, color=Colors.GREEN + Colors.BOLD)
+        
         print_with_typing_effect("\nTypical API calls per plan:", speed=0.01, color=Colors.YELLOW)
         print_with_typing_effect("  - Standard mode: 5 calls (2× keywords, draft, detailed, metadata)", 
                             speed=0.01, color=Colors.YELLOW)
@@ -307,6 +326,8 @@ def main():
                             speed=0.01, color=Colors.RED)
         print_with_typing_effect("  - Offline mode: 2 calls (same as minimal, but NO rate limiting)", 
                             speed=0.01, color=Colors.RED)
+        print_with_typing_effect("  - Chat mode: 2 calls (1× keywords + 1 continuous chat session)", 
+                            speed=0.01, color=Colors.GREEN + Colors.BOLD)
         
         print()
         return
@@ -387,47 +408,82 @@ def main():
 
         # Process user query and generate travel plan
         try:
-            # Check if we should skip the draft plan
-            if config.SKIP_DRAFT_PLAN:
-                print_section_header("Direct Plan Creation")
-                print_with_typing_effect("Skipping draft plan and going directly to detailed plan...", 
-                                     speed=0.02, color=Colors.YELLOW)
+            should_save_plan = True  # Flag to determine if we should save the plan
+            detailed_plan = ""  # Initialize detailed_plan variable
+            
+            # Check if we should use the chat-based approach
+            if config.USE_CHAT_MODE:
+                print_section_header("Multi-section Plan Creation")
+                print_with_typing_effect("Using advanced multi-section travel plan generation...", 
+                                    speed=0.02, color=Colors.GREEN)
                 
-                # Set an empty draft plan
-                draft_plan = ""
-                # No feedback needed since we're skipping draft
-                feedback = "Create a detailed plan directly."
-            else:
-                # Generate draft plan
-                print_section_header("Creating Draft Plan")
-                print_with_typing_effect("Analyzing your preferences and searching for relevant information...", speed=0.02)
-                draft_plan = agent.generate_draft_plan(user_query)
-
-                print_section_header("Draft Travel Plan")
-                print(Colors.CYAN + draft_plan + Colors.END)
-
-                # Ask for user feedback
-                feedback = ask_user("Do you like this plan? Any changes or specific requests?")
-
-            # Continue if user wants to proceed (or if we're using direct mode)
-            if feedback.lower() not in ["no", "quit", "exit"] or config.SKIP_DRAFT_PLAN:
-                # Generate detailed plan with user feedback
-                print_section_header("Creating Detailed Plan")
-                print_with_typing_effect("Incorporating your feedback and creating a detailed itinerary...", speed=0.02)
-
-                # Show search process in real-time (handled by RAG database logging)
+                # Show search process in real-time
                 print_section_header("RAG Search Process")
                 print_with_typing_effect("Searching knowledge base for relevant information...", speed=0.01)
-                time.sleep(0.5)  # Small pause to let the search happen and show logs
-
-                # First part - generate the actual plan
-                print_section_header("Creating Comprehensive Plan")
-                print_with_typing_effect("Step 1/2: Creating comprehensive travel plan...", speed=0.01)
-                detailed_plan = agent.generate_detailed_plan(user_query, draft_plan, feedback)
-
-                print_section_header("Detailed Travel Plan")
+                
+                # Generate the complete plan using a multi-section approach
+                print_section_header("Creating Travel Plan")
+                print_with_typing_effect("Analyzing your request for optimal planning...", speed=0.02, color=Colors.BLUE)
+                print_with_typing_effect("Generating comprehensive travel plan in multiple detailed sections...", speed=0.02)
+                print_with_typing_effect("Ensuring plan logic and verifying request match with plausibility check...", 
+                                   speed=0.01, color=Colors.YELLOW)
+                print_with_typing_effect("This approach ensures complete, vivid descriptions tailored exactly to your request!", 
+                                   speed=0.01, color=Colors.GREEN)
+                detailed_plan = agent.generate_travel_plan_chat(user_query)
+                
+                print_section_header("Travel Plan")
                 print(Colors.CYAN + detailed_plan + Colors.END)
+            
+            # Otherwise, use the traditional approach
+            else:
+                # Check if we should skip the draft plan
+                if config.SKIP_DRAFT_PLAN:
+                    print_section_header("Direct Plan Creation")
+                    print_with_typing_effect("Skipping draft plan and going directly to detailed plan...", 
+                                        speed=0.02, color=Colors.YELLOW)
+                    
+                    # Set an empty draft plan
+                    draft_plan = ""
+                    # No feedback needed since we're skipping draft
+                    feedback = "Create a detailed plan directly."
+                else:
+                    # Generate draft plan
+                    print_section_header("Creating Draft Plan")
+                    print_with_typing_effect("Analyzing your preferences and searching for relevant information...", speed=0.02)
+                    draft_plan = agent.generate_draft_plan(user_query)
 
+                    print_section_header("Draft Travel Plan")
+                    print(Colors.CYAN + draft_plan + Colors.END)
+
+                    # Ask for user feedback
+                    feedback = ask_user("Do you like this plan? Any changes or specific requests?")
+
+                # Continue if user wants to proceed (or if we're using direct mode)
+                if feedback.lower() not in ["no", "quit", "exit"] or config.SKIP_DRAFT_PLAN:
+                    # Generate detailed plan with user feedback
+                    print_section_header("Creating Detailed Plan")
+                    print_with_typing_effect("Incorporating your feedback and creating a detailed itinerary...", speed=0.02)
+
+                    # Show search process in real-time (handled by RAG database logging)
+                    print_section_header("RAG Search Process")
+                    print_with_typing_effect("Searching knowledge base for relevant information...", speed=0.01)
+                    time.sleep(0.5)  # Small pause to let the search happen and show logs
+
+                    # First part - generate the actual plan
+                    print_section_header("Creating Comprehensive Plan")
+                    print_with_typing_effect("Step 1/2: Creating comprehensive travel plan...", speed=0.01)
+                    detailed_plan = agent.generate_detailed_plan(user_query, draft_plan, feedback)
+
+                    print_section_header("Detailed Travel Plan")
+                    print(Colors.CYAN + detailed_plan + Colors.END)
+                else:
+                    # User doesn't want to proceed with this plan
+                    should_save_plan = False
+                    print_with_typing_effect("Operation cancelled. Let's try again!",
+                                        speed=0.02, color=Colors.YELLOW)
+
+            # Save the plan if we should
+            if should_save_plan and detailed_plan:
                 # Save the plan with its title - the save_travel_plan function will extract the title
                 print_with_typing_effect("Saving your travel plan...", speed=0.02)
                 saved_files = save_travel_plan(detailed_plan)
@@ -453,10 +509,7 @@ def main():
                 print_with_typing_effect(f"   - {txt_filename}", speed=0.01, color=Colors.GREEN)
                 
                 print_with_typing_effect("Your travel plan has been saved to the output directory.",
-                                     speed=0.01, color=Colors.CYAN)
-            else:
-                print_with_typing_effect("Operation cancelled. Let's try again!",
-                                     speed=0.02, color=Colors.YELLOW)
+                                    speed=0.01, color=Colors.CYAN)
 
         except Exception as e:
             logger.error(f"Error generating travel plan: {str(e)}", exc_info=True)

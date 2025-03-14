@@ -166,21 +166,33 @@ def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, 
     output_dir.mkdir(exist_ok=True)
     
     # Extract plan title for the filename
-    # First try to extract a creative title (if it exists)
-    title_match = re.search(r"^# (.+)$", plan_text, re.MULTILINE)
+    # First try to find the main title (typically at the beginning)
+    title_match = re.search(r"^#\s+(.+?)$", plan_text, re.MULTILINE)
+    
+    # If no match at the beginning, try looking for any h1 heading
+    if not title_match:
+        title_match = re.search(r"#\s+([^#\n]+)", plan_text)
+    
+    # If still no match, look for a title-like pattern
+    if not title_match:
+        title_match = re.search(r"(?i)(?:title|plan|itinerary|vacation|trip):\s*([^\n]+)", plan_text)
+    
     if title_match:
         raw_title = title_match.group(1).strip()
         # Remove any metadata markers from the title
         raw_title = re.sub(r'PLAN_METADATA__ANALYSIS', '', raw_title)
     else:
-        # Fall back to destination name
-        if not destination_name:
-            destination_match = re.search(r"# ([^#\n]+)", plan_text)
-            if destination_match:
-                destination_name = destination_match.group(1).strip()
+        # Fall back to destination name or a default
+        if destination_name:
+            raw_title = destination_name
+        else:
+            # Last resort - check for mention of specific countries
+            for country in ["Vietnam", "Thailand", "Japan", "China", "Bali", "Indonesia"]:
+                if country in plan_text:
+                    raw_title = f"{country} Travel Plan"
+                    break
             else:
-                destination_name = "Travel Plan"
-        raw_title = destination_name
+                raw_title = "Travel Plan"
     
     # Look for potential itinerary type info in the title or text
     days_prefix = ""
