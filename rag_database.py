@@ -175,14 +175,31 @@ class RAGDatabase:
         Returns:
             List of relevant document chunks with metadata
         """
+        # First check if the query contains location names to prioritize
+        import re
+        locations = re.findall(r'\b([A-Z][a-zA-Z]+(?:[\s-][A-Z][a-zA-Z]+)*)\b', query)
+        common_non_locations = {'I', 'My', 'Me', 'Mine', 'The', 'A', 'An', 'And', 'Or', 'But', 'For', 'With', 'To', 'From'}
+        locations = [loc for loc in locations if loc not in common_non_locations]
+        
+        # Determine if we need to modify the query to emphasize specific locations
+        emphasized_query = query
+        if locations:
+            # Create an emphasized query that doubles the location mentions for better matching
+            for location in locations:
+                if location.lower() not in emphasized_query.lower():
+                    emphasized_query = f"{emphasized_query} {location} {location}"
+        
+        # Perform the search with the potentially modified query
+        print(f"Searching with query: '{emphasized_query}'")
         results = self.collection.query(
-            query_texts=[query],
+            query_texts=[emphasized_query],
             n_results=n_results
         )
         
         # Process and format the results
         formatted_results = []
         must_see_results = []  # Special container for must-see items
+        important_results = [] # Medium priority items
         
         if results and results['documents']:
             for i, doc in enumerate(results['documents'][0]):
@@ -195,18 +212,41 @@ class RAGDatabase:
                     'score': score,
                 }
                 
-                # Check if this document contains MUST SEE information
+                # Check if document contains location names mentioned in the query
+                location_match = False
+                for location in locations:
+                    if location.lower() in doc.lower():
+                        location_match = True
+                        break
+                
+                # Apply tiered prioritization logic
                 if "has_must_see" in metadata and metadata["has_must_see"] == "yes":
+                    # Top priority: MUST SEE content
                     must_see_results.append(formatted_result)
                     if "location_name" in metadata and metadata["location_name"]:
-                        print(f"⭐ Found MUST SEE information for: {metadata['location_name']}")
+                        print(f"⭐⭐ Found MUST SEE information for: {metadata['location_name']}")
                     else:
-                        print(f"⭐ Found MUST SEE information in document")
+                        print(f"⭐⭐ Found MUST SEE information in document")
+                
+                elif location_match:
+                    # Medium priority: Content matching specific locations
+                    important_results.append(formatted_result)
+                    print(f"⭐ Found content matching location: {', '.join(locations)}")
+                
                 else:
+                    # Regular priority content
                     formatted_results.append(formatted_result)
         
-        # Prioritize must-see content by putting it first in the results
-        return must_see_results + formatted_results
+        # Modify n_results if we need to include more must-see content
+        # This ensures that we don't lose must-see content due to the n_results limit
+        if len(must_see_results) > 0:
+            # Increase n_results to ensure at least 2 regular results along with all must-see content
+            n_results = max(n_results, len(must_see_results) + 2)
+        
+        # Prioritize results in three tiers: must-see first, important second, regular last
+        # But cap total results at the adjusted n_results
+        combined_results = must_see_results + important_results + formatted_results
+        return combined_results[:n_results]
     
     def extract_search_keywords(self, query: str) -> dict:
         """
@@ -525,8 +565,14 @@ class RAGDatabase:
         for i, result in enumerate(results):
             source = result['metadata'].get('source', 'Unknown source')
             filename = result['metadata'].get('filename', 'Unknown file')
-            # Include more detailed source information
-            context_parts.append(f"DOCUMENT {i+1} (Source: {source}, File: {filename}):\n{result['text']}\n")
+            # Mark whether this is a MUST-SEE item
+            is_must_see = result['metadata'].get('has_must_see', 'no') == 'yes'
+            
+            # Include more detailed source information and mark RAG database content
+            if is_must_see:
+                context_parts.append(f"DOCUMENT {i+1} [FROM DATABASE - MUST-SEE] (Source: {source}, File: {filename}):\n{result['text']}\n")
+            else:
+                context_parts.append(f"DOCUMENT {i+1} [FROM DATABASE] (Source: {source}, File: {filename}):\n{result['text']}\n")
         
         return "\n".join(context_parts)
     
@@ -544,8 +590,16 @@ class RAGDatabase:
         """
         print("Searching with LLM-extracted keywords...")
         
+        # First collect all MUST-SEE content related to the query
+        must_see_results = []
+        
         # First, try a direct search with the original query
         original_results = self.search(query, n_results=2)
+        
+        # Collect MUST-SEE results from original query
+        for result in original_results:
+            if result['metadata'].get('has_must_see', 'no') == 'yes':
+                must_see_results.append(result)
         
         # Perform targeted searches based on extracted keywords
         all_results = []
@@ -555,6 +609,12 @@ class RAGDatabase:
         for location in keywords.get('locations', []):
             print(f"Searching with location: '{location}'")
             location_results = self.search(location, n_results=2)
+            
+            # Add MUST-SEE content to the special collection
+            for result in location_results:
+                if result['metadata'].get('has_must_see', 'no') == 'yes':
+                    must_see_results.append(result)
+                    
             all_results.extend(location_results)
             
             # Combine location with themes
@@ -563,6 +623,11 @@ class RAGDatabase:
                 print(f"Searching with: '{combined_query}'")
                 theme_results = self.search(combined_query, n_results=1)
                 all_results.extend(theme_results)
+                
+                # Add MUST-SEE content to the special collection
+                for result in theme_results:
+                    if result['metadata'].get('has_must_see', 'no') == 'yes':
+                        must_see_results.append(result)
         
         # Search by themes
         for theme in keywords.get('themes', []):
@@ -583,18 +648,29 @@ class RAGDatabase:
             accommodation_results = self.search(accommodation, n_results=1)
             all_results.extend(accommodation_results)
         
+        # Ensure MUST-SEE content is in the results
+        for result in must_see_results:
+            all_results.append(result)
+        
         # Deduplicate results
         unique_results = []
         seen_texts = set()
         
-        for result in all_results:
-            # Use the first 100 chars as a fingerprint to avoid exact duplicates
+        # First add all MUST-SEE content to ensure they're included
+        for result in must_see_results:
             text_start = result['text'][:100] if len(result['text']) >= 100 else result['text']
             if text_start not in seen_texts:
                 seen_texts.add(text_start)
                 unique_results.append(result)
         
-        print(f"Found {len(unique_results)} unique results after deduplication")
+        # Then add other results
+        for result in all_results:
+            text_start = result['text'][:100] if len(result['text']) >= 100 else result['text']
+            if text_start not in seen_texts:
+                seen_texts.add(text_start)
+                unique_results.append(result)
+        
+        print(f"Found {len(unique_results)} unique results after deduplication (including {len(must_see_results)} MUST-SEE items)")
         
         # If no results found, fall back to regular search
         if not unique_results:
@@ -603,11 +679,33 @@ class RAGDatabase:
         
         # Format results as a single context string
         context_parts = []
-        for i, result in enumerate(unique_results[:n_results]):  # Limit to requested number
+        
+        # First add a section for MUST-SEE content if any was found
+        must_see_parts = []
+        for i, result in enumerate(must_see_results):
             source = result['metadata'].get('source', 'Unknown source')
             filename = result['metadata'].get('filename', 'Unknown file')
-            # Include more detailed source information
-            context_parts.append(f"DOCUMENT {i+1} (Source: {source}, File: {filename}):\n{result['text']}\n")
+            must_see_parts.append(f"MUST-SEE ITEM {i+1} [FROM DATABASE - MUST-SEE] (Source: {source}, File: {filename}):\n{result['text']}\n")
+            
+        if must_see_parts:
+            context_parts.append("## IMPORTANT TRAVEL HIGHLIGHTS [FROM DATABASE]\n\n" + "\n".join(must_see_parts))
+        
+        # Then add the rest of the results
+        general_parts = []
+        for i, result in enumerate(unique_results[:n_results]):  # Limit to requested number
+            # Skip if this is already in must_see_parts to avoid duplication
+            text_start = result['text'][:100] if len(result['text']) >= 100 else result['text']
+            if any(text_start in part for part in must_see_parts):
+                continue
+                
+            source = result['metadata'].get('source', 'Unknown source')
+            filename = result['metadata'].get('filename', 'Unknown file')
+            
+            # Mark content as from the RAG database
+            general_parts.append(f"DOCUMENT {i+1} [FROM DATABASE] (Source: {source}, File: {filename}):\n{result['text']}\n")
+        
+        if general_parts:
+            context_parts.append("## GENERAL TRAVEL INFORMATION [FROM DATABASE]\n\n" + "\n".join(general_parts))
         
         return "\n".join(context_parts)
         

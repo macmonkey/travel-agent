@@ -71,13 +71,27 @@ DRAFT TRAVEL PLAN:
         Returns:
             Formatted prompt string
         """
+        # First extract relationships between locations and durations for special handling
+        import re
+        location_durations = {}
+        relationship_matches = re.findall(r'(\d+)\s*(?:day|days|night|nights|week|weeks)\s*(?:in|at|near|around)\s+([A-Z][a-zA-Z]+(?:[\s-][A-Z][a-zA-Z]+)*)', user_query, re.IGNORECASE)
+        for duration, location in relationship_matches:
+            location_durations[location] = duration
+        
+        location_instructions = ""
+        if location_durations:
+            location_list = []
+            for location, duration in location_durations.items():
+                location_list.append(f"- {location}: {duration} days")
+            location_instructions = "SPECIFIC LOCATION DURATIONS (must be followed exactly):\n" + "\n".join(location_list) + "\n\n"
+        
         # Check if draft plan exists
         if draft_plan:
             # Standard prompt with draft plan
             header = f"""
 You are an expert travel planner AI that creates detailed, personalized travel plans.
 Your task is to create a comprehensive travel plan based on the user's request, your draft plan, 
-and their feedback, while STRICTLY prioritizing information from the knowledge database.
+and their feedback, while STRICTLY prioritizing information from the RAG database.
 
 ORIGINAL USER REQUEST:
 {user_query}
@@ -86,59 +100,117 @@ DRAFT TRAVEL PLAN:
 {draft_plan}
 
 USER FEEDBACK:
-{feedback}"""
+{feedback}
+
+{location_instructions}"""
         else:
             # Direct mode prompt (no draft plan)
             header = f"""
 You are an expert travel planner AI that creates detailed, personalized travel plans.
 Your task is to create a comprehensive travel plan based on the user's request,
-while STRICTLY prioritizing information from the knowledge database.
+while STRICTLY prioritizing information from the RAG database.
 Since we're in direct mode, you'll create a detailed plan immediately without a draft step.
 
 ORIGINAL USER REQUEST:
-{user_query}"""
+{user_query}
+
+{location_instructions}"""
+            
+        # Extract all potential location names to emphasize them in the instructions
+        potential_locations = re.findall(r'\b([A-Z][a-zA-Z]+(?:[\s-][A-Z][a-zA-Z]+)*)\b', user_query)
+        common_non_locations = {'I', 'My', 'Me', 'Mine', 'The', 'A', 'An', 'And', 'Or', 'But', 'For', 'With', 'To', 'From'}
+        locations = [loc for loc in potential_locations if loc not in common_non_locations]
+        
+        location_emphasis = ""
+        if locations:
+            location_emphasis = "LOCATIONS THAT MUST BE INCLUDED:\n" + ", ".join(locations) + "\n\n"
+        
+        # Check for special themes that need emphasis
+        special_themes = []
+        theme_keywords = {
+            "romantic": ["romantic", "romance", "honeymoon", "anniversary", "couple", "love"],
+            "party": ["party", "parties", "nightlife", "clubbing", "bar hopping", "dancing"],
+            "family": ["family", "children", "kids", "child", "kid", "family-friendly"],
+            "relaxation": ["relaxation", "relax", "chill", "unwind", "peaceful", "quiet", "spa"]
+        }
+        
+        for theme, keywords in theme_keywords.items():
+            if any(keyword in user_query.lower() for keyword in keywords):
+                special_themes.append(theme)
+        
+        theme_emphasis = ""
+        if special_themes:
+            theme_emphasis = "SPECIAL THEMES THAT MUST BE EMPHASIZED:\n" + ", ".join(special_themes) + "\n\n"
+        
+        # Check for surprise elements
+        surprise_emphasis = ""
+        if any(term in user_query.lower() for term in ["surprise", "special", "unexpected", "gift"]):
+            surprise_emphasis = "INCLUDE SURPRISE ELEMENTS: The user has requested special surprises or unexpected elements in the plan.\n\n"
             
         return header + f"""
 
 RELEVANT TRAVEL INFORMATION:
 {context}
 
-CRITICAL INSTRUCTIONS:
+{location_emphasis}{theme_emphasis}{surprise_emphasis}CRITICAL INSTRUCTIONS:
 1. Start with a creative, appealing title for the travel plan that captures its essence
    - Create a catchy, memorable title like "Vietnam's Coastal Flavors: Beach & Culinary Adventure"
    - The title should reflect the main theme, destinations, and unique aspects of the trip
    - Make it both descriptive and emotionally appealing
    - Include relevant cultural/regional references when appropriate
 
-2. Create a detailed travel plan that incorporates the user's feedback
-3. You MUST clearly distinguish between information from the knowledge database and your own suggestions
-4. For ANY recommendation that doesn't come directly from the provided travel information, mark it as [EXTERNAL SUGGESTION]
-5. ⭐ CRITICAL: Pay special attention to "MUST SEE" or "IMPORTANT" information in the database marked with "IMPORTANT TRAVEL ADVICE" and ALWAYS incorporate these into your plan if they relate to locations mentioned in the plan
-6. Structure the plan in a professional, easy-to-read format with clear headings
-7. Include the following sections:
-   - Title: A creative, appealing name for the travel plan (as described above)
+2. Create a detailed travel plan that incorporates the user's feedback and EXACTLY matches their requested locations and durations
+3. You MUST use the RAG database as your primary source and clearly mark all content:
+   - STRICTLY prioritize information from the RAG database (marked with [FROM DATABASE])
+   - Only use external suggestions when NO relevant information exists in the database
+   - Clearly mark RAG database content with [FROM DATABASE] and external suggestions with [EXTERNAL SUGGESTION]
+   - When using RAG database content, include the source document name in parentheses
+
+4. ⭐ MUST-SEE INTEGRATION (HIGHEST PRIORITY):
+   - Include a "Key Highlights" section at the beginning of your plan
+   - Place all MUST-SEE/IMPORTANT content from the database in this section
+   - Incorporate all MUST-SEE database content marked with [FROM DATABASE - MUST-SEE] into your plan
+   - Place MUST-SEE content prominently at the beginning of each location section
+   - Maintain the original formatting of MUST-SEE content
+   - Ensure these items are featured prominently in the daily itinerary
+
+5. Structure the plan in a professional, easy-to-read format with clear headings including:
+   - Title: A creative, appealing name for the travel plan
    - Original Request: Add the user's original query at the top
+   - Key Highlights: MUST-SEE attractions and activities from the database
    - Executive Summary (brief overview)
    - Daily Itinerary (day-by-day breakdown including accommodation for each day)
-   - Detailed Accommodations (with specific options from the travel documents)
-     - CLEARLY mark the source of each accommodation as [FROM DATABASE] or [EXTERNAL SUGGESTION]
-     - If no specific accommodations are available in the documents, suggest 2-3 suitable options
-       for each location with approximate price ranges
+   - Detailed Accommodations (with options from the database or external suggestions if none in database)
    - Activities & Attractions (with descriptions and visiting tips)
-     - CLEARLY mark the source of each activity as [FROM DATABASE] or [EXTERNAL SUGGESTION]
    - Transportation Details (between and within destinations)
    - Dining Recommendations
    - Estimated Budget Breakdown
    - Practical Tips (cultural norms, packing suggestions, etc.)
-   - Sources: List all sources that were used to create this plan in detail
+   - RAG Database Usage Report: Include a section at the end that details:
+     * What percentage of the plan came from the RAG database vs. external knowledge
+     * Which specific sections relied most heavily on RAG database content
+     * List all document sources used from the RAG database
+   - Customer Response: Create a personalized response section with:
+     * Email Draft: A warm, enthusiastic email addressing the customer that:
+       - Briefly summarizes the key highlights of your proposed plan
+       - Addresses specific elements from their original request
+       - Asks personalized follow-up questions about preferences
+       - Addresses any potential issues identified in your plausibility check
+       - Suggests concrete next steps
+       - Uses a friendly yet professional tone
+       - Is signed from a travel consultant persona
+     * Sales Agent Notes: A separate section for internal use containing:
+       - A clear, numbered list of all open questions requiring clarification
+       - Potential issues or concerns from the plausibility check
+       - Specific customer preferences that need confirmation
+       - Alternative options to suggest if certain elements are unavailable
+       - Any pricing considerations or special arrangements needed
 
-7. For each day in the itinerary, explicitly mention where the traveler will be staying that night
-8. Match the style, tone, and level of detail found in professional travel documents
-9. The plan should be comprehensive (800-1200 words) and ready for the user to use
-10. At the end of the document, include a detailed "Sources" section with:
-   - List of all database documents used
-   - For each major recommendation, note whether it came from the database or is an external suggestion
-   - If mostly external suggestions were used, explain why the database information wasn't suitable
+6. For each day in the itinerary, explicitly mention where the traveler will be staying that night
+7. The plan should be comprehensive (800-1200 words) and ready for the user to use
+
+CRUCIAL: When the user has requested a specific duration in a location (like "2 days in Leinfelden-Echterdingen"), 
+you MUST honor this request EXACTLY. Never remove, shorten, or extend these specifically requested durations.
 
 DETAILED TRAVEL PLAN:
 """

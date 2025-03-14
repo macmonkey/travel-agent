@@ -74,6 +74,7 @@ def parse_arguments():
     cache_group = parser.add_argument_group('Cache Management')
     rate_group = parser.add_argument_group('Rate Limiting')
     general_group = parser.add_argument_group('General Options')
+    input_group = parser.add_argument_group('Input Options')
     
     # Cache management options
     cache_group.add_argument('--clear-cache', action='store_true', 
@@ -96,6 +97,12 @@ def parse_arguments():
                               help='Force reindexing of documents')
     general_group.add_argument('--info', action='store_true',
                               help='Show information about the agent and exit')
+    
+    # Input options
+    input_group.add_argument('--prompt', type=str, metavar='FILE',
+                           help='Path to a text file containing the prompt to use')
+    input_group.add_argument('--prompt-text', type=str, metavar='TEXT',
+                           help='Directly specify the prompt text to use')
     
     # API usage optimization
     api_group = parser.add_argument_group('API Usage Optimization')
@@ -397,15 +404,40 @@ def main():
     print_with_typing_effect("Tell me about your dream vacation, and I'll create a personalized travel plan.", speed=0.02)
     print_with_typing_effect("You can type 'quit' or 'exit' at any time to end our session.", speed=0.02)
 
+    # Check if prompt was provided from file or command line
+    predefined_prompt = None
+    
+    if args.prompt:
+        try:
+            with open(args.prompt, 'r', encoding='utf-8') as f:
+                predefined_prompt = f.read().strip()
+                print_with_typing_effect(f"Using prompt from file: {args.prompt}", speed=0.01, color=Colors.GREEN)
+        except Exception as e:
+            print_with_typing_effect(f"Error reading prompt file: {e}", speed=0.01, color=Colors.RED)
+            
+    elif args.prompt_text:
+        predefined_prompt = args.prompt_text
+        print_with_typing_effect("Using prompt provided via command line", speed=0.01, color=Colors.GREEN)
+    
     while True:
-        # Get user input
-        user_query = ask_user("What kind of trip are you planning?")
-
-        if user_query.lower() in ["quit", "exit"]:
-            print_with_typing_effect("Thank you for using the Travel Plan Agent. Goodbye!",
-                                 speed=0.02, color=Colors.CYAN)
-            break
-
+        # Determine if we're using a predefined prompt or user input
+        if predefined_prompt:
+            user_query = predefined_prompt
+            print_with_typing_effect("Using predefined prompt for travel planning...", speed=0.01, color=Colors.CYAN)
+            # Reset predefined_prompt so that after processing, the program exits
+            prompt_to_process = predefined_prompt
+            predefined_prompt = None
+        else:
+            # Interactive mode with normal user input
+            user_query = ask_user("What kind of trip are you planning?")
+            
+            if user_query.lower() in ["quit", "exit"]:
+                print_with_typing_effect("Thank you for using the Travel Plan Agent. Goodbye!",
+                                     speed=0.02, color=Colors.CYAN)
+                break
+                
+            prompt_to_process = user_query
+        
         # Process user query and generate travel plan
         try:
             should_save_plan = True  # Flag to determine if we should save the plan
@@ -429,7 +461,7 @@ def main():
                                    speed=0.01, color=Colors.YELLOW)
                 print_with_typing_effect("This approach ensures complete, vivid descriptions tailored exactly to your request!", 
                                    speed=0.01, color=Colors.GREEN)
-                detailed_plan = agent.generate_travel_plan_chat(user_query)
+                detailed_plan = agent.generate_travel_plan_chat(prompt_to_process)
                 
                 print_section_header("Travel Plan")
                 print(Colors.CYAN + detailed_plan + Colors.END)
@@ -450,7 +482,7 @@ def main():
                     # Generate draft plan
                     print_section_header("Creating Draft Plan")
                     print_with_typing_effect("Analyzing your preferences and searching for relevant information...", speed=0.02)
-                    draft_plan = agent.generate_draft_plan(user_query)
+                    draft_plan = agent.generate_draft_plan(prompt_to_process)
 
                     print_section_header("Draft Travel Plan")
                     print(Colors.CYAN + draft_plan + Colors.END)
@@ -472,7 +504,7 @@ def main():
                     # First part - generate the actual plan
                     print_section_header("Creating Comprehensive Plan")
                     print_with_typing_effect("Step 1/2: Creating comprehensive travel plan...", speed=0.01)
-                    detailed_plan = agent.generate_detailed_plan(user_query, draft_plan, feedback)
+                    detailed_plan = agent.generate_detailed_plan(prompt_to_process, draft_plan, feedback)
 
                     print_section_header("Detailed Travel Plan")
                     print(Colors.CYAN + detailed_plan + Colors.END)

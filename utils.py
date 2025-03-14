@@ -152,7 +152,7 @@ def format_plan_as_markdown(plan: Dict[str, Any]) -> str:
 
 def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, str]:
     """
-    Save a travel plan as Markdown and TXT files.
+    Save a travel plan as Markdown and TXT files with optimized filename.
     
     Args:
         plan_text: The travel plan text
@@ -165,8 +165,68 @@ def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, 
     output_dir = Path("./output")
     output_dir.mkdir(exist_ok=True)
     
-    # Extract plan title for the filename
-    # First try to find the main title (typically at the beginning)
+    # Generate a comprehensive metadata-rich filename
+    filename_info = generate_optimized_filename(plan_text, destination_name)
+    
+    # Save as Markdown
+    md_path = output_dir / f"{filename_info['filename']}.md"
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(plan_text)
+    logger.info(f"Markdown saved to {md_path}")
+    
+    # Save as plain text
+    txt_path = output_dir / f"{filename_info['filename']}.txt"
+    with open(txt_path, 'w', encoding='utf-8') as f:
+        f.write(plan_text)
+    logger.info(f"Plain text saved to {txt_path}")
+    
+    # Return paths with additional metadata
+    result = {
+        "markdown": str(md_path),
+        "txt": str(txt_path),
+        "title": filename_info['title'],
+        "destinations": filename_info['destinations'],
+        "duration": filename_info['duration'],
+        "themes": filename_info['themes'],
+        "filename": filename_info['filename'],
+        "created": datetime.datetime.now().strftime("%Y-%m-%d")
+    }
+    
+    # Log a nice summary
+    logger.info(f"Travel plan saved in markdown and text formats")
+    logger.info(f"Plan title: {result['title']}")
+    
+    if result['destinations']:
+        logger.info(f"Destinations: {', '.join(result['destinations'])}")
+    
+    if result['duration']:
+        logger.info(f"Duration: {result['duration']}")
+    
+    if result['themes']:
+        logger.info(f"Themes: {', '.join(result['themes'])}")
+    
+    return result
+
+def generate_optimized_filename(plan_text: str, destination_name: str = None) -> Dict[str, str]:
+    """
+    Generate an optimized, descriptive filename based on plan content.
+    
+    Args:
+        plan_text: The travel plan text
+        destination_name: Optional destination name override
+        
+    Returns:
+        Dictionary with filename information
+    """
+    result = {
+        "filename": "Travel_Plan",
+        "title": "Travel Plan", 
+        "destinations": [],
+        "duration": "",
+        "themes": []
+    }
+    
+    # Extract plan title - first look for H1 heading
     title_match = re.search(r"^#\s+(.+?)$", plan_text, re.MULTILINE)
     
     # If no match at the beginning, try looking for any h1 heading
@@ -181,98 +241,134 @@ def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, 
         raw_title = title_match.group(1).strip()
         # Remove any metadata markers from the title
         raw_title = re.sub(r'PLAN_METADATA__ANALYSIS', '', raw_title)
-    else:
-        # Fall back to destination name or a default
-        if destination_name:
-            raw_title = destination_name
-        else:
-            # Last resort - check for mention of specific countries
-            for country in ["Vietnam", "Thailand", "Japan", "China", "Bali", "Indonesia"]:
-                if country in plan_text:
-                    raw_title = f"{country} Travel Plan"
-                    break
+        result["title"] = raw_title
+    elif destination_name:
+        result["title"] = f"{destination_name} Travel Plan"
+    
+    # Extract destinations - look for countries, cities, and regions
+    # Comprehensive list of locations to check for
+    location_list = [
+        # Countries
+        "Vietnam", "Thailand", "Japan", "China", "Indonesia", "Malaysia", 
+        "Singapore", "Laos", "Cambodia", "Germany", "Austria", "Switzerland",
+        "France", "Italy", "Spain", "United States", "Canada", "Australia",
+        # Cities and regions
+        "Hanoi", "Bangkok", "Tokyo", "Ho Chi Minh", "Hoi An", "Da Nang", 
+        "Halong Bay", "Berlin", "Munich", "Stuttgart", "Paris", "Rome",
+        "Barcelona", "London", "New York", "Los Angeles", "Sydney",
+        "Leinfelden", "Echterdingen", "Leinfelden-Echterdingen"
+    ]
+    
+    # Find all destinations mentioned in the plan
+    destinations = []
+    for location in location_list:
+        if location in plan_text:
+            destinations.append(location)
+    
+    if destinations:
+        result["destinations"] = destinations
+    
+    # Extract trip duration with various patterns
+    duration_patterns = [
+        r'(\d+)[\s-]*(day|days|Day|Days)',
+        r'(\d+)[\s-]*(night|nights|Night|Nights)',
+        r'(\d+)[\s-]*(week|weeks|Week|Weeks)'
+    ]
+    
+    for pattern in duration_patterns:
+        duration_match = re.search(pattern, plan_text)
+        if duration_match:
+            duration_value = duration_match.group(1)
+            duration_unit = duration_match.group(2).lower()
+            
+            # Normalize to 'Day' format
+            if 'night' in duration_unit:
+                result["duration"] = f"{duration_value}-Day"
+            elif 'week' in duration_unit:
+                # Convert weeks to days
+                days = int(duration_value) * 7
+                result["duration"] = f"{days}-Day"
             else:
-                raw_title = "Travel Plan"
+                result["duration"] = f"{duration_value}-Day"
+            break
     
-    # Look for potential itinerary type info in the title or text
-    days_prefix = ""
-    if "days" in plan_text.lower() or "day" in plan_text.lower():
-        # Try to extract number of days from text
-        days_match = re.search(r'(\d+)[\s-]*day', plan_text.lower())
-        if days_match:
-            days = days_match.group(1)
-            days_prefix = f"{days} Days - "
-    
-    # Extract country/region information if possible
-    countries = []
-    for country in ["Vietnam", "Thailand", "Japan", "China", "Bali", "Indonesia", 
-                   "Malaysia", "Singapore", "Laos", "Cambodia", "Asia", "Europe"]:
-        if country.lower() in plan_text.lower() or country.lower() in raw_title.lower():
-            countries.append(country)
-    
-    # Create a descriptive plan title
-    plan_title = raw_title
-    if not any(country in plan_title for country in countries) and countries:
-        # Add country to title if not already there
-        countries_text = " & ".join(countries[:2])  # Limit to 2 countries
-        plan_title = f"{countries_text}: {plan_title}"
-    
-    # Clean and format the title
-    plan_title = plan_title.replace("PLAN_METADATA__ANALYSIS", "").strip()
-    plan_title = re.sub(r'\s+', ' ', plan_title)  # Remove extra spaces
-    
-    # Use full title for display, but create a clean version for filename
-    display_title = plan_title
-    
-    # Create a filename-friendly version (keeping more of the original title)
-    # Still sanitize but less aggressively
-    clean_title = re.sub(r'[<>:"/\\|?*]', '', plan_title)  # Remove illegal filename chars
-    clean_title = re.sub(r'\s+', ' ', clean_title).strip()  # Normalize whitespace
-    
-    # Add date - use a more readable date format
-    date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-    
-    # Construct an improved base filename that's more readable but still safe
-    # Format: "Title - YYYY-MM-DD"
-    base_filename = f"{clean_title} - {date_str}"
-    
-    # If the filename is still too long for some systems, cap it at 180 chars
-    if len(base_filename) > 180:
-        # Keep the start and end portions for context
-        base_filename = base_filename[:150] + "..." + base_filename[-20:]
-    
-    # Save as Markdown
-    md_path = output_dir / f"{base_filename}.md"
-    with open(md_path, 'w', encoding='utf-8') as f:
-        f.write(plan_text)
-    logger.info(f"Markdown saved to {md_path}")
-    
-    # Save as plain text
-    txt_path = output_dir / f"{base_filename}.txt"
-    with open(txt_path, 'w', encoding='utf-8') as f:
-        f.write(plan_text)
-    logger.info(f"Plain text saved to {txt_path}")
-    
-    # Return paths with additional metadata
-    result = {
-        "markdown": str(md_path),
-        "txt": str(txt_path),
-        "title": display_title,  # Use the clean, full title for display
-        "days": days_match.group(1) if 'days_match' in locals() and days_match else None,
-        "countries": countries,
-        "filename": base_filename,
-        "created": date_str
+    # Extract trip themes with comprehensive list
+    theme_keywords = {
+        "Relaxation": ["relaxation", "relax", "peaceful", "retreat", "tranquil", "serene", "calm"],
+        "Adventure": ["adventure", "exciting", "thrill", "adrenaline", "expedition", "trek", "hiking"],
+        "Beach": ["beach", "coastal", "ocean", "sea", "shore", "sand", "surf"],
+        "Cultural": ["culture", "cultural", "history", "historical", "heritage", "tradition", "museum"],
+        "Food": ["food", "culinary", "gastronomy", "cuisine", "dining", "tasting", "restaurant"],
+        "Family": ["family", "kid-friendly", "children", "family-friendly", "parents", "kid", "kids"],
+        "Party": ["party", "nightlife", "club", "bar", "dancing", "nightclub", "festival"],
+        "Romantic": ["romantic", "romance", "couple", "honeymoon", "anniversary", "love", "intimate"],
+        "Luxury": ["luxury", "luxurious", "high-end", "exclusive", "premium", "first-class", "5-star"],
+        "Budget": ["budget", "affordable", "cheap", "economical", "backpacker", "inexpensive", "budget-friendly"]
     }
     
-    # Log a nice summary
-    logger.info(f"Travel plan saved as: {result['markdown']} and {result['txt']}")
-    logger.info(f"Plan title: {plan_title}")
-    if countries:
-        logger.info(f"Countries: {', '.join(countries)}")
-    if days_prefix:
-        logger.info(f"Duration: {days_prefix}")
+    found_themes = []
+    for theme, keywords in theme_keywords.items():
+        if any(keyword in plan_text.lower() for keyword in keywords):
+            found_themes.append(theme)
     
+    if found_themes:
+        result["themes"] = found_themes
+    
+    # Current date in YYYYMMDD format
+    date_str = datetime.datetime.now().strftime("%Y%m%d")
+    
+    # Now build the optimized filename with the new format
+    # "[Orte] - [Gesamt-Tage]T Reise - [Hauptzweck] - [Datum].md"
+    
+    # Part 1: Destinations
+    destination_part = ""
+    if destinations:
+        if len(destinations) <= 3:
+            destination_part = "-".join(destinations)
+        else:
+            # If more than 3 destinations, use first two + a count
+            destination_part = f"{destinations[0]}-{destinations[1]}+{len(destinations)-2}"
+    else:
+        destination_part = "Unspecified"
+    
+    # Part 2: Total days
+    duration_part = ""
+    if result["duration"]:
+        # Extract just the number from the duration (e.g., "10-Day" -> "10T")
+        days_match = re.search(r'(\d+)', result["duration"])
+        if days_match:
+            duration_part = f"{days_match.group(1)}T Reise"
+        else:
+            duration_part = "Reise"
+    else:
+        duration_part = "Reise"
+    
+    # Part 3: Main purpose
+    purpose_part = ""
+    if found_themes and len(found_themes) > 0:
+        # Use the first two themes as the main purpose
+        if len(found_themes) == 1:
+            purpose_part = found_themes[0]
+        else:
+            purpose_part = f"{found_themes[0]}-{found_themes[1]}"
+    else:
+        purpose_part = "Finalized_Itinerary"
+    
+    # Build the filename with the new format - directly using underscores
+    filename = f"{destination_part}_{duration_part}_{purpose_part}_{date_str}"
+    
+    # Final safety checks for filename
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    filename = re.sub(r'\s+', '_', filename)  # Replace any remaining spaces with underscores
+    filename = re.sub(r'_+', '_', filename)  # Remove multiple underscores
+    
+    # Keep filename at a reasonable length
+    if len(filename) > 180:
+        filename = filename[:160] + f"_{date_str}"
+    
+    result["filename"] = filename
     return result
+
 
 def estimate_reading_time(text: str) -> int:
     """
