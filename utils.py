@@ -150,12 +150,13 @@ def format_plan_as_markdown(plan: Dict[str, Any]) -> str:
     
     return md
 
-def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, str]:
+def save_travel_plan(plan_text: str, metadata_text: str = "", destination_name: str = None) -> Dict[str, str]:
     """
     Save a travel plan as Markdown and TXT files with optimized filename.
     
     Args:
-        plan_text: The travel plan text
+        plan_text: The travel plan text (email content)
+        metadata_text: Technical metadata to include in a collapsible section
         destination_name: Name of the main destination (for filename)
         
     Returns:
@@ -168,16 +169,37 @@ def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, 
     # Generate a comprehensive metadata-rich filename
     filename_info = generate_optimized_filename(plan_text, destination_name)
     
+    # Format the metadata as a collapsible section if provided
+    if metadata_text:
+        collapsible_metadata = f"""
+
+<details>
+<summary>TECHNISCHE DETAILS</summary>
+
+{metadata_text}
+
+</details>
+"""
+        # Full markdown document with collapsible section
+        full_markdown = f"{plan_text}\n\n{collapsible_metadata}"
+        
+        # Plain text version (without HTML tags)
+        full_plaintext = f"{plan_text}\n\n## TECHNISCHE DETAILS\n\n{metadata_text}"
+    else:
+        # If no metadata, just use the plan text directly
+        full_markdown = plan_text
+        full_plaintext = plan_text
+    
     # Save as Markdown
     md_path = output_dir / f"{filename_info['filename']}.md"
     with open(md_path, 'w', encoding='utf-8') as f:
-        f.write(plan_text)
+        f.write(full_markdown)
     logger.info(f"Markdown saved to {md_path}")
     
     # Save as plain text
     txt_path = output_dir / f"{filename_info['filename']}.txt"
     with open(txt_path, 'w', encoding='utf-8') as f:
-        f.write(plan_text)
+        f.write(full_plaintext)
     logger.info(f"Plain text saved to {txt_path}")
     
     # Return paths with additional metadata

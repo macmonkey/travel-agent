@@ -4,9 +4,234 @@ This module contains all the prompts used by the Gemini model.
 """
 
 import textwrap
+import re
 
 class TravelPrompts:
     """Class containing all prompts for the Travel Plan Agent."""
+    
+    def get_keyword_extraction_prompt(self, user_query: str) -> str:
+        """
+        Generate prompt for keyword extraction from user query.
+        
+        Args:
+            user_query: User's travel plan request
+            
+        Returns:
+            Formatted prompt string
+        """
+        return f"""
+You are a travel search keyword extractor. Extract the most important search keywords from this travel query.
+Deeply analyze the query to identify ALL relevant location names, themes, activities, and other significant details.
+
+USER QUERY:
+{user_query}
+
+First, perform a structured analysis of the query:
+1. Identify all geographic locations mentioned (countries, cities, regions, landmarks, etc.)
+2. Identify trip purpose and desired experiences (relaxation, adventure, romance, family, etc.)
+3. Identify specific activities or attractions mentioned
+4. Identify temporal information (duration, specific dates, seasons)
+5. Identify accommodation preferences and special requirements
+6. Identify transportation specifications
+7. Identify special occasions or surprises mentioned
+8. Identify budget-related information
+
+Then, respond with a structured JSON object containing these fields:
+1. "locations": Array of ALL location names (countries, cities, regions, specific places, etc.)
+2. "themes": Array of ALL travel themes (beach, culture, food, adventure, romance, family, etc.)
+3. "activities": Array of ALL specific activities mentioned or implied by the themes
+4. "accommodation_types": Array of ALL accommodation preferences
+5. "timeframe": Any time-related information (duration, specific days for activities)
+6. "languages": Languages specifically mentioned or implied by the query
+7. "budget_level": Budget category if mentioned (budget, mid-range, luxury)
+8. "special_requirements": Any special needs or requests (accessibility, dietary, surprises, etc.)
+9. "relationships": Array describing connections between elements (e.g., "2 days in Leinfelden-Echterdingen")
+
+IMPORTANT EXTRACTION RULES: 
+- Extract EVERY geographic location, even those mentioned as brief stopovers
+- Use English terms in all fields, translating from other languages if needed
+- Include ALL locations mentioned, even if they're just transit points or brief stops
+- Recognize compound concepts like "romantic beach dinner" as both "romance" theme and "dining" activity
+- For timeframes, include not just total duration but also time allocated to each location if specified
+- If "Vietnam" is mentioned in any way, make sure it's included in locations
+- If "beach" or coastal terms are mentioned, include "beach" in themes
+- If "food" or culinary terms are mentioned, include "food" in themes
+
+Return ONLY a valid JSON object, nothing else.
+"""
+
+    def get_semantic_analysis_prompt(self, user_query: str) -> str:
+        """
+        Generate prompt for semantic analysis of the user request.
+        
+        Args:
+            user_query: User's travel plan request
+            
+        Returns:
+            Formatted prompt string
+        """
+        return f"""
+You are a travel request analyzer specializing in deeply understanding the explicit and implicit meaning behind travel queries.
+Analyze the following travel request and extract all meaningful information in a structured format.
+
+TRAVEL REQUEST:
+{user_query}
+
+Please provide a comprehensive, multi-level analysis of this request, covering the following categories:
+
+1. TRAVELER PROFILE
+   - Number of travelers (explicit or implied)
+   - Traveler demographics (age groups, relationships, etc.)
+   - Traveler interests explicitly mentioned
+   - Traveler preferences implied by language or context
+   - Experience level (first-time visitors vs. experienced travelers)
+   - Special needs or accommodations required
+
+2. TRAVEL LOGISTICS
+   - Primary destinations (countries, cities, specific locations)
+   - Secondary or stopover destinations
+   - Trip duration (total and per location if specified)
+   - Preferred travel dates or seasons
+   - Accommodation preferences (types, quality level, specific requirements)
+   - Transportation preferences (between and within destinations)
+   - Budget constraints or expectations (explicit or implied)
+
+3. MOTIVATIONS & EXPECTATIONS
+   - Primary purpose of the trip (relaxation, adventure, culture, etc.)
+   - Special occasions or celebrations
+   - "Must-have" experiences explicitly mentioned
+   - Implicitly desired experiences based on language/tone
+   - Pain points or negative experiences to avoid
+   - Balance between structured activities and free time
+
+4. CONTEXTUAL UNDERSTANDING
+   - Language indicators (formality, enthusiasm, hesitation)
+   - Cultural context clues
+   - Prior travel experience implied
+   - Decision-making stage (initial research vs. final planning)
+   - Priority areas (what matters most to this traveler)
+   - Contradictions or tensions in the request
+
+5. STRUCTURED METADATA
+   - Trip type: [single value - leisure, business, educational, etc.]
+   - Duration category: [single value - weekend, short trip, extended vacation, etc.]
+   - Budget level: [single value - budget, mid-range, luxury, unspecified]
+   - Planning timeframe: [single value - immediate, near future, distant future, unspecified]
+   - Activity level: [single value - relaxed, moderate, active, very active]
+   - Flexibility level: [single value - rigid, somewhat flexible, very flexible, unspecified]
+
+FORMAT: Present this information in a clear, hierarchical structure with bullet points.
+Ensure you extract BOTH explicitly stated information AND reasonably implied details.
+When something is implied rather than explicitly stated, indicate this in your analysis.
+
+TRAVEL REQUEST ANALYSIS:
+"""
+
+    def get_rag_usage_report_prompt(self) -> str:
+        """
+        Generate prompt for RAG usage report template.
+        
+        Returns:
+            Formatted prompt string
+        """
+        return """
+### RAG Database Utilization
+
+- **Database Content Usage**: Approximately {db_percentage}% of recommendations came from the RAG database
+- **MUST-SEE Content Integration**: {must_see_count} must-see items were incorporated
+- **External Suggestions**: {external_count} recommendations came from external knowledge
+- **Total Source Documents Used**: {len_sources}
+
+### Source Document List
+{source_list}
+"""
+
+    def get_customer_email_prompt(self, plan_text: str, user_query: str) -> str:
+        """
+        Generate prompt for customer email generation.
+        
+        Args:
+            plan_text: The travel plan content
+            user_query: Original user query
+            
+        Returns:
+            Formatted prompt string
+        """
+        return f"""
+Generate a highly personalized, conversational email to send directly to the customer who made this travel request.
+The email should feel like it was written specifically for this customer by a thoughtful travel consultant who carefully 
+analyzed their request and created a customized travel plan.
+
+ORIGINAL CUSTOMER REQUEST:
+{user_query}
+
+TRAVEL PLAN CONTENT (REFERENCE ONLY):
+{plan_text}
+
+INSTRUCTIONS:
+1. Create a completely fresh, unique email that addresses this specific customer and their unique travel needs
+2. The tone should be warm, enthusiastic, and professional - not corporate or templated
+3. Reference specific details from their request to show you truly understood what they're looking for
+4. MUST INCLUDE a "Sample Itinerary" section with a day-by-day breakdown covering the FULL TRIP DURATION
+5. Highlight 3-5 key aspects of the proposed travel plan that align with their stated preferences
+6. Ask 3-5 thoughtful questions about specific elements that would benefit from clarification
+7. Suggest 2-3 logical next steps to move the planning process forward
+8. Use a natural, conversational style with perfect grammar and spelling
+9. Do NOT use any templated language or generic phrases that could apply to any travel plan
+10. Include a professional yet personalized greeting and closing
+
+FORMAT:
+- A clear, specific subject line
+- A warm, personalized greeting
+- Introduction (1-2 short paragraphs)
+- Sample Itinerary section with a day-by-day breakdown for the full trip duration
+- Bullet points for key highlights
+- Numbered questions and next steps
+- A friendly, encouraging closing
+
+Remember: This email should feel like it was written by a human travel expert who genuinely cares about creating 
+the perfect travel experience for this specific customer.
+"""
+
+    def get_sales_agent_notes_prompt(self, plan_text: str, user_query: str, open_questions: str) -> str:
+        """
+        Generate prompt for sales agent notes generation.
+        
+        Args:
+            plan_text: The travel plan content
+            user_query: Original user query
+            open_questions: Formatted string of identified open questions
+            
+        Returns:
+            Formatted prompt string
+        """
+        return f"""
+Generate internal sales agent notes that would help a travel consultant effectively follow up with this customer.
+These notes should provide practical guidance for the travel agent who will be communicating with the customer.
+
+CUSTOMER REQUEST:
+{user_query}
+
+TRAVEL PLAN DETAILS (FOR REFERENCE):
+{plan_text[:1000]}...
+
+ALREADY IDENTIFIED QUESTIONS/ISSUES:
+{open_questions}
+
+INSTRUCTIONS:
+1. Create professional, practical internal notes that would genuinely help a travel consultant
+2. Focus on concrete action items, potential issues, and sales strategies
+3. Include specific considerations related to this particular trip and customer
+4. Be realistic about potential challenges, alternatives, and next steps
+5. Include information about pricing strategy and special arrangements if relevant
+6. These notes are for INTERNAL USE ONLY and should be written in a direct, practical tone
+
+FORMAT:
+1. "Open Questions" section with 4-6 specific items requiring clarification
+2. "Alternatives" section with 3-4 backup options if primary choices are unavailable
+
+Remember that these notes will only be seen internally by the travel agency staff, not by the customer.
+"""
     
     def get_draft_plan_prompt(self, user_query: str, context: str) -> str:
         """
@@ -72,7 +297,6 @@ DRAFT TRAVEL PLAN:
             Formatted prompt string
         """
         # First extract relationships between locations and durations for special handling
-        import re
         location_durations = {}
         relationship_matches = re.findall(r'(\d+)\s*(?:day|days|night|nights|week|weeks)\s*(?:in|at|near|around)\s+([A-Z][a-zA-Z]+(?:[\s-][A-Z][a-zA-Z]+)*)', user_query, re.IGNORECASE)
         for duration, location in relationship_matches:
@@ -153,66 +377,63 @@ RELEVANT TRAVEL INFORMATION:
 {context}
 
 {location_emphasis}{theme_emphasis}{surprise_emphasis}CRITICAL INSTRUCTIONS:
-1. Start with a creative, appealing title for the travel plan that captures its essence
-   - Create a catchy, memorable title like "Vietnam's Coastal Flavors: Beach & Culinary Adventure"
-   - The title should reflect the main theme, destinations, and unique aspects of the trip
-   - Make it both descriptive and emotionally appealing
-   - Include relevant cultural/regional references when appropriate
+1. FORMAT THE RESPONSE AS A PROFESSIONAL, PERSONALIZED CUSTOMER EMAIL:
+   - You are crafting a completely personalized email that will be sent directly to the customer
+   - The email should be highly personalized based on the specific RAG content and user query
+   - Use a warm, conversational tone that creates a connection with the specific customer
+   - Match your language (German/English) to the customer's original query
+   - Match formality level to the customer's style (use "Sie" for default German)
+   - Keep the total length to 2-3 screen pages maximum
+   - DO NOT use templated, pre-written paragraphs - everything must be freshly generated
 
-2. Create a detailed travel plan that incorporates the user's feedback and EXACTLY matches their requested locations and durations
-3. You MUST use the RAG database as your primary source and clearly mark all content:
-   - STRICTLY prioritize information from the RAG database (marked with [FROM DATABASE])
-   - Only use external suggestions when NO relevant information exists in the database
-   - Clearly mark RAG database content with [FROM DATABASE] and external suggestions with [EXTERNAL SUGGESTION]
-   - When using RAG database content, include the source document name in parentheses
+2. EMAIL STRUCTURE:
+   - Begin with a clear subject line summarizing the travel proposal
+   - Include a personalized greeting that references specific details from the customer's query
+   - Write a compelling introduction that shows you understand their specific travel needs
+   - After the introduction, include a CLEARLY LABELED "Sample Itinerary" section with a complete day-by-day outline covering the FULL TRIP DURATION
+   - Highlight 3-5 key travel experiences tailored to their request using bullet points
+   - Ask 3-5 concrete, thoughtful questions that address potential ambiguities or choices
+   - Suggest 2-3 logical next steps tailored to this specific inquiry
+   - End with a warm, conversational closing that invites further dialogue
+   - Add your name and contact information at the end
 
-4. ⭐ MUST-SEE INTEGRATION (HIGHEST PRIORITY):
-   - Include a "Key Highlights" section at the beginning of your plan
-   - Place all MUST-SEE/IMPORTANT content from the database in this section
-   - Incorporate all MUST-SEE database content marked with [FROM DATABASE - MUST-SEE] into your plan
-   - Place MUST-SEE content prominently at the beginning of each location section
-   - Maintain the original formatting of MUST-SEE content
-   - Ensure these items are featured prominently in the daily itinerary
+3. FORMATTING & STYLE GUIDELINES:
+   - Use short paragraphs (3-5 lines maximum) for better readability
+   - Include a concise day-by-day sample outline focusing only on main destinations/activities
+   - Use descriptive language that helps the client visualize specific experiences
+   - Avoid technical travel jargon and complex sentences
+   - DO NOT include extensive transportation details or accommodation lists
+   - Focus on creating an engaging, persuasive email with just enough itinerary details
 
-5. Structure the plan in a professional, easy-to-read format with clear headings including:
-   - Title: A creative, appealing name for the travel plan
-   - Original Request: Add the user's original query at the top
-   - Key Highlights: MUST-SEE attractions and activities from the database
-   - Executive Summary (brief overview)
-   - Daily Itinerary (day-by-day breakdown including accommodation for each day)
-   - Detailed Accommodations (with options from the database or external suggestions if none in database)
-   - Activities & Attractions (with descriptions and visiting tips)
-   - Transportation Details (between and within destinations)
-   - Dining Recommendations
-   - Estimated Budget Breakdown
-   - Practical Tips (cultural norms, packing suggestions, etc.)
-   - RAG Database Usage Report: Include a section at the end that details:
-     * What percentage of the plan came from the RAG database vs. external knowledge
-     * Which specific sections relied most heavily on RAG database content
-     * List all document sources used from the RAG database
-   - Customer Response: Create a personalized response section with:
-     * Email Draft: A warm, enthusiastic email addressing the customer that:
-       - Briefly summarizes the key highlights of your proposed plan
-       - Addresses specific elements from their original request
-       - Asks personalized follow-up questions about preferences
-       - Addresses any potential issues identified in your plausibility check
-       - Suggests concrete next steps
-       - Uses a friendly yet professional tone
-       - Is signed from a travel consultant persona
-     * Sales Agent Notes: A separate section for internal use containing:
-       - A clear, numbered list of all open questions requiring clarification
-       - Potential issues or concerns from the plausibility check
-       - Specific customer preferences that need confirmation
-       - Alternative options to suggest if certain elements are unavailable
-       - Any pricing considerations or special arrangements needed
+4. CONTENT PRIORITIZATION:
+   - Use the RAG database as your primary information source
+   - Only mention the most compelling highlights from the potential trip
+   - DO NOT include a list of accommodations, activities, transportation options
+   - Focus on the unique value proposition and emotional appeal of the destination
+   - DO NOT use [FROM DATABASE] or [EXTERNAL SUGGESTION] tags in the customer email
 
-6. For each day in the itinerary, explicitly mention where the traveler will be staying that night
-7. The plan should be comprehensive (800-1200 words) and ready for the user to use
+5. SALES AGENT NOTES SECTION:
+   - After the customer email, add a clearly separated section titled "## Internal Sales Agent Notes"
+   - Organize these notes with the following headings:
+     * "Open Questions" - List 4-6 specific items requiring clarification
+     * "Alternatives" - List 3-4 backup options if primary choices are unavailable
+   - Write these notes in a direct, practical tone for internal use only
+   - DO NOT include sections titled "Pricing & Special Arrangements" or "Risk Factors"
+
+6. TECHNICAL METADATA (at end of document in a regular section):
+   - Add a regular markdown section at the very end titled "## TECHNISCHE DETAILS"
+   - Include the following ONLY in this section:
+     * List of all RAG database documents used
+     * Percentage of content from database vs. external sources
+     * Source identification (which recommendations came from database)
+     * Technical notes about destinations, visa requirements, etc.
+   - This section should NOT be part of the email content
+   - DO NOT use HTML tags like <details> or <summary>
 
 CRUCIAL: When the user has requested a specific duration in a location (like "2 days in Leinfelden-Echterdingen"), 
 you MUST honor this request EXACTLY. Never remove, shorten, or extend these specifically requested durations.
 
-DETAILED TRAVEL PLAN:
+Create the completely personalized customer email now:
 """
 
     def get_validation_prompt(self, plan: str) -> str:
@@ -259,9 +480,9 @@ VALIDATION RESULT:
         """
         # Use textwrap to create a more readable prompt
         return textwrap.dedent(f"""
-        You are an expert travel planner AI called TravelPlanner that creates detailed, personalized travel plans.
+        You are an expert travel consultant responsible for creating personalized customer emails and sales notes.
         
-        Your task is to create a comprehensive travel plan based on the user's request,
+        Your task is to create a professional, personalized email to a potential travel client based on their request,
         while STRICTLY prioritizing information from the knowledge database provided to you.
         
         RELEVANT TRAVEL INFORMATION FROM DATABASE:
@@ -271,52 +492,69 @@ VALIDATION RESULT:
         {sources_text}
         
         CRITICAL INSTRUCTIONS:
-        1. Start with a creative, appealing title for the travel plan that captures its essence
-           - Create a catchy, memorable title like "Vietnam's Coastal Flavors: Beach & Culinary Adventure"
-           - The title should reflect the main theme, destinations, and unique aspects of the trip
-           - Make it both descriptive and emotionally appealing
-           - Include relevant cultural/regional references when appropriate
+        1. FORMAT THE RESPONSE AS A PROFESSIONAL, PERSONALIZED CUSTOMER EMAIL:
+           - Craft a completely personalized email that will be sent directly to the customer
+           - The email should be highly personalized based on the specific RAG content and user query
+           - Use a warm, conversational tone that creates a connection with the specific customer
+           - Match your language (German/English) to the customer's original query
+           - Match formality level to the customer's style (use "Sie" for default German)
+           - Keep the total length to 2-3 screen pages maximum
+           - DO NOT use templated, pre-written paragraphs - everything must be freshly generated
+           - ABSOLUTE TOP PRIORITY: You MUST INCLUDE a detailed section titled "Sample Itinerary" with a COMPLETE day-by-day breakdown covering the FULL TRIP DURATION RIGHT AFTER the introduction paragraph
 
-        2. You MUST clearly distinguish between information from the knowledge database and your own suggestions
-        3. For ANY recommendation that doesn't come directly from the provided travel information, mark it as [EXTERNAL SUGGESTION]
-        4. ⭐ CRITICAL: Pay special attention to "MUST SEE" or "IMPORTANT" information in the database marked with "IMPORTANT TRAVEL ADVICE" and ALWAYS incorporate these into your plan if they relate to locations mentioned in the plan
-        5. Structure the plan in a professional, easy-to-read format with clear headings
-        6. Include the following sections in your COMPLETE response - DO NOT refer to "previous responses" or use placeholders:
-           - Title: A creative, appealing name for the travel plan (as described above)
-           - Original Request: Add the user's original query at the top
-           - Executive Summary (brief overview)
-           - Daily Itinerary (day-by-day breakdown including accommodation for each day)
-               - Make this section HIGHLY DESCRIPTIVE and INSPIRING, with vivid details for each day
-               - Use evocative language that paints a mental picture of each experience
-               - Include sensory details (sights, sounds, tastes, etc.) to bring the itinerary to life
-               - Incorporate small authentic details that make the plan feel personal and real
-           - Detailed Accommodations (with specific options from the travel documents)
-             - CLEARLY mark the source of each accommodation as [FROM DATABASE] or [EXTERNAL SUGGESTION]
-             - If no specific accommodations are available in the documents, suggest 2-3 suitable options
-               for each location with approximate price ranges
-           - Activities & Attractions (with descriptions and visiting tips)
-             - CLEARLY mark the source of each activity as [FROM DATABASE] or [EXTERNAL SUGGESTION]
-           - Transportation Details (between and within destinations)
-           - Dining Recommendations
-           - Estimated Budget Breakdown
-           - Practical Tips (cultural norms, packing suggestions, etc.)
-           - Sources: List all sources that were used to create this plan in detail
+        2. EMAIL STRUCTURE:
+           - Begin with a clear subject line summarizing the travel proposal
+           - Include a personalized greeting that references specific details from the customer's query
+           - Write a compelling introduction that shows you understand their specific travel needs
+           - IMMEDIATELY AFTER THE INTRODUCTION, include a section titled "Sample Itinerary" with a detailed day-by-day breakdown of the FULL trip
+           - For each day, include the main destinations, activities, and highlights
+           - Highlight 3-5 key travel experiences tailored to their request using bullet points
+           - Ask 3-5 concrete, thoughtful questions that address potential ambiguities or choices
+           - Suggest 2-3 logical next steps tailored to this specific inquiry
+           - End with a warm, conversational closing that invites further dialogue
+           - Add your name and contact information at the end
 
-        6. For each day in the itinerary, explicitly mention where the traveler will be staying that night
-        7. Match the style, tone, and level of detail found in professional travel documents
-        8. The plan should be comprehensive (800-1200 words) and ready for the user to use
-        9. At the end of the document, include a detailed "Sources" section with:
-           - List of all database documents used
-           - For each major recommendation, note whether it came from the database or is an external suggestion
-           - If mostly external suggestions were used, explain why the database information wasn't suitable
+        3. FORMATTING & STYLE GUIDELINES:
+           - Use short paragraphs (3-5 lines maximum) for better readability
+           - Include a concise day-by-day outline focusing only on main destinations/activities
+           - Use descriptive language that helps the client visualize specific experiences
+           - Avoid technical travel jargon and complex sentences
+           - DO NOT include extensive transportation details or accommodation lists
+           - Focus on creating an engaging, persuasive email with just enough itinerary details
+
+        4. CONTENT PRIORITIZATION:
+           - Use the RAG database as your primary information source
+           - Only mention the most compelling highlights from the potential trip
+           - DO NOT include a list of accommodations, activities, transportation options
+           - Focus on the unique value proposition and emotional appeal of the destination
+           - DO NOT use [FROM DATABASE] or [EXTERNAL SUGGESTION] tags in the customer email
+
+        5. SALES AGENT NOTES SECTION:
+           - After the customer email, add a clearly separated section titled "## Internal Sales Agent Notes"
+           - Organize these notes with the following headings:
+             * "Open Questions" - List 4-6 specific items requiring clarification
+             * "Alternatives" - List 3-4 backup options if primary choices are unavailable
+           - Write these notes in a direct, practical tone for internal use only
+           - DO NOT include sections titled "Pricing & Special Arrangements" or "Risk Factors"
+
+        6. TECHNICAL METADATA (at end of document in a regular section):
+           - Add a regular markdown section at the very end titled "## TECHNISCHE DETAILS"
+           - Include the following ONLY in this section:
+             * List of all RAG database documents used
+             * Percentage of content from database vs. external sources
+             * Source identification (which recommendations came from database)
+             * Technical notes about destinations, visa requirements, etc.
+           - This section should NOT be part of the email content
+           - DO NOT use HTML tags like <details> or <summary>
         
         EXTREMELY IMPORTANT: 
         - NEVER use phrases like "See previous response" or similar placeholders
         - ALWAYS include ALL details directly in your response  
-        - Make your descriptions VIVID and INSPIRING rather than clinical
-        - DO NOT COMPRESS OR SUMMARIZE your response - provide ALL details
+        - Make your descriptions WARM and ENGAGING rather than clinical
+        - DO NOT COMPRESS OR SUMMARIZE your response
+        - AVOID creating a detailed travel itinerary in the email - focus on persuasion instead
            
-        Wait for the user to tell you what kind of travel plan they'd like you to create.
+        Wait for the user to tell you what kind of travel they're interested in, then create a personalized customer email.
         """)
 
     def get_plan_analysis_prompt(self, plan: str, user_query: str, sources_used: list) -> str:

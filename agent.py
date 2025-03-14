@@ -9,6 +9,7 @@ import logging
 import json
 import hashlib
 import os
+import re
 from pathlib import Path
 import google.generativeai as genai
 from prompts import TravelPrompts
@@ -581,47 +582,8 @@ class TravelAgent:
         """
         print("Extracting intelligent search keywords with Gemini...")
         
-        # Create a prompt for keyword extraction with improved instructions for more comprehensive extraction
-        keyword_prompt = f"""
-You are a travel search keyword extractor. Extract the most important search keywords from this travel query.
-Deeply analyze the query to identify ALL relevant location names, themes, activities, and other significant details.
-
-USER QUERY:
-{user_query}
-
-First, perform a structured analysis of the query:
-1. Identify all geographic locations mentioned (countries, cities, regions, landmarks, etc.)
-2. Identify trip purpose and desired experiences (relaxation, adventure, romance, family, etc.)
-3. Identify specific activities or attractions mentioned
-4. Identify temporal information (duration, specific dates, seasons)
-5. Identify accommodation preferences and special requirements
-6. Identify transportation specifications
-7. Identify special occasions or surprises mentioned
-8. Identify budget-related information
-
-Then, respond with a structured JSON object containing these fields:
-1. "locations": Array of ALL location names (countries, cities, regions, specific places, etc.)
-2. "themes": Array of ALL travel themes (beach, culture, food, adventure, romance, family, etc.)
-3. "activities": Array of ALL specific activities mentioned or implied by the themes
-4. "accommodation_types": Array of ALL accommodation preferences
-5. "timeframe": Any time-related information (duration, specific days for activities)
-6. "languages": Languages specifically mentioned or implied by the query
-7. "budget_level": Budget category if mentioned (budget, mid-range, luxury)
-8. "special_requirements": Any special needs or requests (accessibility, dietary, surprises, etc.)
-9. "relationships": Array describing connections between elements (e.g., "2 days in Leinfelden-Echterdingen")
-
-IMPORTANT EXTRACTION RULES: 
-- Extract EVERY geographic location, even those mentioned as brief stopovers
-- Use English terms in all fields, translating from other languages if needed
-- Include ALL locations mentioned, even if they're just transit points or brief stops
-- Recognize compound concepts like "romantic beach dinner" as both "romance" theme and "dining" activity
-- For timeframes, include not just total duration but also time allocated to each location if specified
-- If "Vietnam" is mentioned in any way, make sure it's included in locations
-- If "beach" or coastal terms are mentioned, include "beach" in themes
-- If "food" or culinary terms are mentioned, include "food" in themes
-
-Return ONLY a valid JSON object, nothing else.
-"""
+        # Get the keyword extraction prompt from prompts.py
+        keyword_prompt = self.prompts.get_keyword_extraction_prompt(user_query)
         
         try:
             # Generate keyword extraction using rate-limited function
@@ -907,7 +869,7 @@ Return ONLY a valid JSON object, nothing else.
             
         return updated_keywords
     
-    def generate_detailed_plan(self, user_query: str, draft_plan: str, feedback: str) -> str:
+    def generate_detailed_plan(self, user_query: str, draft_plan: str, feedback: str) -> tuple:
         """
         Generate a detailed travel plan based on draft plan and user feedback.
         
@@ -917,7 +879,7 @@ Return ONLY a valid JSON object, nothing else.
             feedback: User feedback on the draft plan
             
         Returns:
-            Detailed travel plan as a string
+            Tuple of (detailed_plan, metadata_report)
         """
         print("Generating detailed travel plan...")
         
@@ -977,35 +939,32 @@ Return ONLY a valid JSON object, nothing else.
         # Generate detailed plan with rate limiting
         start_time = time.time()
         response = self._rate_limited_generate(self.model, prompt)
-        detailed_plan = response.text
+        travel_plan_content = response.text
         end_time = time.time()
         
         # Make sure sources are included
-        if "Sources:" not in detailed_plan and sources:
-            detailed_plan += "\n\n## Sources\n"
-            detailed_plan += source_text
-            detailed_plan += "\n\n## Original Request\n"
-            detailed_plan += user_query
+        if "Sources:" not in travel_plan_content and sources:
+            travel_plan_content += "\n\n## Sources\n"
+            travel_plan_content += source_text
+            travel_plan_content += "\n\n## Original Request\n"
+            travel_plan_content += user_query
         
-        print(f"Detailed plan generated in {end_time - start_time:.2f} seconds.")
+        print(f"Travel plan content generated in {end_time - start_time:.2f} seconds.")
         
         # Generate a more comprehensive quality assurance report
-        metadata_report = self.generate_plan_metadata(detailed_plan, user_query, sources)
+        metadata_report = self.generate_plan_metadata(travel_plan_content, user_query, sources)
         
         # Add a RAG database usage section if it doesn't already exist
-        if "RAG Database Usage Report" not in detailed_plan:
-            rag_report = self.generate_rag_usage_report(detailed_plan, context, sources)
-            detailed_plan += f"\n\n## RAG Database Usage Report\n\n{rag_report}"
-            
-        # Check if customer response section exists, generate if it doesn't
-        if "Customer Response" not in detailed_plan:
-            customer_response = self.generate_customer_response(detailed_plan, user_query)
-            detailed_plan += f"\n\n## Customer Response\n\n{customer_response}"
+        if "RAG Database Usage Report" not in metadata_report:
+            rag_report = self.generate_rag_usage_report(travel_plan_content, context, sources)
+            metadata_report += f"\n\n## RAG Database Usage Report\n\n{rag_report}"
         
-        # Combine plan and full metadata
-        complete_plan = f"{detailed_plan}\n\n{'-'*80}\n\n# PLAN METADATA & ANALYSIS\n\n{metadata_report}"
+        # Now generate the actual customer email and sales agent notes separately - this is the key change
+        print("Generating personalized customer email and sales agent notes...")
+        customer_email = self.generate_customer_response(travel_plan_content, user_query)
         
-        return complete_plan
+        # Return the customer email (as the main plan) and the metadata report separately
+        return customer_email, metadata_report
         
     def generate_rag_usage_report(self, plan: str, context: str, sources: list) -> str:
         """
@@ -1031,39 +990,39 @@ Return ONLY a valid JSON object, nothing else.
         else:
             db_percentage = 0
             
-        # Create the report
-        report = f"""
-### RAG Database Utilization
-
-- **Database Content Usage**: Approximately {db_percentage}% of recommendations came from the RAG database
-- **MUST-SEE Content Integration**: {must_see_count} must-see items were incorporated
-- **External Suggestions**: {external_count} recommendations came from external knowledge
-- **Total Source Documents Used**: {len(sources)}
-
-### Source Document List
-"""
-        # Add the source list
-        for source in sources:
-            report += f"- {source}\n"
+        # Get the RAG usage report prompt template from prompts.py and fill in values
+        template = self.prompts.get_rag_usage_report_prompt()
+        
+        # Create source list
+        source_list = "\n".join([f"- {source}" for source in sources])
+        
+        # Fill in the template with actual values
+        report = template.format(
+            db_percentage=db_percentage,
+            must_see_count=must_see_count,
+            external_count=external_count,
+            len_sources=len(sources),
+            source_list=source_list
+        )
             
         return report
         
     def generate_customer_response(self, plan: str, user_query: str) -> str:
         """
-        Generate a comprehensive customer response section with email draft and sales agent notes.
+        Generate a comprehensive customer response as a personalized email with sales agent notes.
         
         Args:
             plan: The generated travel plan
             user_query: Original user query
             
         Returns:
-            Customer response section as a string
+            Customer email with sales agent notes as a string
         """
         # Extract key elements from the plan to personalize the response
         
         # Extract destinations
         destinations = []
-        destination_pattern = r"##.*(?:Itinerary|Destinations)(.*?)##"
+        destination_pattern = r"(?:##.*(?:Itinerary|Destinations)|destinations:|locations:)(.*?)(?:##|\n\n)"
         destination_match = re.search(destination_pattern, plan, re.DOTALL | re.IGNORECASE)
         if destination_match:
             dest_text = destination_match.group(1)
@@ -1075,6 +1034,13 @@ Return ONLY a valid JSON object, nothing else.
             # Remove duplicates
             destinations = list(dict.fromkeys(destinations))
         
+        # If no destinations were found, look for them throughout the document
+        if not destinations:
+            common_countries = ['Vietnam', 'Thailand', 'Japan', 'China', 'Malaysia', 'Singapore', 'Indonesia', 'Cambodia', 'Laos']
+            for country in common_countries:
+                if country in plan:
+                    destinations.append(country)
+        
         # Extract duration
         duration = ""
         duration_match = re.search(r'(\d+)[\s-]*(day|days|Day|Days)', plan)
@@ -1083,14 +1049,15 @@ Return ONLY a valid JSON object, nothing else.
         
         # Extract key highlights or must-see attractions
         highlights = []
-        highlights_pattern = r"##.*(?:Highlights|Must-See|Key Attractions)(.*?)##"
+        highlights_pattern = r"(?:##.*(?:Highlights|Must-See|Key Attractions)|highlights:|attractions:)(.*?)(?:##|\n\n)"
         highlights_match = re.search(highlights_pattern, plan, re.DOTALL | re.IGNORECASE)
         if highlights_match:
             highlight_text = highlights_match.group(1)
             # Extract bullet points
-            highlights = re.findall(r'- (.*?)(?:\n|$)', highlight_text)
-            # Take only first 3 highlights
-            highlights = highlights[:3]
+            highlights = re.findall(r'[-\*•]\s*(.*?)(?:\n|$)', highlight_text)
+            # Take only first 3 highlights if we have more
+            if len(highlights) > 3:
+                highlights = highlights[:3]
         
         # Look for any potential issues or considerations
         considerations = []
@@ -1107,7 +1074,7 @@ Return ONLY a valid JSON object, nothing else.
         if next_steps_match:
             next_steps_text = next_steps_match.group(1)
             # Extract bullet points
-            next_steps = re.findall(r'- (.*?)(?:\n|$)', next_steps_text)
+            next_steps = re.findall(r'[-\*•]\s*(.*?)(?:\n|$)', next_steps_text)
             
         # Extract plausibility check issues
         plausibility_issues = []
@@ -1116,7 +1083,7 @@ Return ONLY a valid JSON object, nothing else.
         if plausibility_match:
             plausibility_text = plausibility_match.group(1)
             # Extract bullet points
-            plausibility_issues = re.findall(r'- (.*?)(?:\n|$)', plausibility_text)
+            plausibility_issues = re.findall(r'[-\*•]\s*(.*?)(?:\n|$)', plausibility_text)
             
         # Extract specific requests from user query
         specific_requests = []
@@ -1131,124 +1098,68 @@ Return ONLY a valid JSON object, nothing else.
                 if len(match.strip()) > 10:  # Only include non-trivial requests
                     specific_requests.append(match.strip())
         
-        # Create the email draft section
-        email = """### Email Draft
-
-Betreff: Ihr maßgeschneiderter Reiseplan ist fertig!
-
-Sehr geehrte(r) Reisende(r),
-
-ich freue mich, Ihnen Ihren maßgeschneiderten Reiseplan präsentieren zu dürfen! Basierend auf Ihren Wünschen habe ich ein Reiseerlebnis zusammengestellt, das perfekt auf Ihre Interessen abgestimmt ist.
-
-"""
+        # Create a concise summary of the plan to use as context for email generation
+        plan_summary = ""
         
-        # Add destination and duration overview
-        if destinations and duration:
-            dest_text = ", ".join(destinations[:-1]) + " und " + destinations[-1] if len(destinations) > 1 else destinations[0]
-            email += f"Ihre {duration}-Reise nach {dest_text} verspricht ein unvergessliches Abenteuer zu werden. "
-        
-        # Add highlights
+        # Try to extract title
+        title_match = re.search(r'#\s+([^\n]+)', plan)
+        if title_match:
+            plan_summary += f"Title: {title_match.group(1)}\n\n"
+        else:
+            # If no title with # format, try to find any title-like text
+            title_alt_match = re.search(r'(?:TRAVEL PLAN|ITINERARY|REISEPLAN):\s*([^\n]+)', plan, re.IGNORECASE)
+            if title_alt_match:
+                plan_summary += f"Title: {title_alt_match.group(1)}\n\n"
+            
+        # Extract executive summary if available
+        summary_match = re.search(r'(?:Summary|Zusammenfassung|Executive Summary|Overview|Überblick)(.*?)(?:\n\n|\n##|$)', plan, re.IGNORECASE | re.DOTALL)
+        if summary_match:
+            plan_summary += f"Summary:\n{summary_match.group(1)}\n\n"
+            
+        # Extract or create highlights section
         if highlights:
-            email += f"Zu den Höhepunkten gehören "
-            for i, highlight in enumerate(highlights):
-                if i == 0:
-                    email += f"{highlight}"
-                elif i == len(highlights) - 1:
-                    email += f" und {highlight}"
-                else:
-                    email += f", {highlight}"
-            email += ".\n\n"
+            plan_summary += "Highlights:\n"
+            for highlight in highlights:
+                plan_summary += f"- {highlight}\n"
+            plan_summary += "\n"
+            
+        # Add destinations and duration
+        if destinations:
+            dest_text = ", ".join(destinations)
+            plan_summary += f"Destinations: {dest_text}\n"
+        if duration:
+            plan_summary += f"Duration: {duration}\n\n"
+            
+        # Add any considerations or important notes
+        if considerations or plausibility_issues:
+            plan_summary += "Important Considerations:\n"
+            for item in (considerations + plausibility_issues):
+                plan_summary += f"- {item}\n"
+            plan_summary += "\n"
         
-        # Address specific elements from original request
-        if specific_requests:
-            email += "Ich habe besonders darauf geachtet, folgende Wünsche aus Ihrer Anfrage zu berücksichtigen:\n"
-            for i, request in enumerate(specific_requests[:3]):
-                email += f"- {request.capitalize()}\n"
-            email += "\n"
+        # Extract any day-by-day itinerary summary (just the headings)
+        itinerary_headers = re.findall(r'(?:Day \d+|Tag \d+)[^\n]*', plan)
+        if itinerary_headers:
+            plan_summary += "Itinerary Overview:\n"
+            for header in itinerary_headers[:10]:  # Limit to first 10 days to keep it concise
+                plan_summary += f"- {header.strip()}\n"
+            plan_summary += "\n"
         
-        # Add personalized insights based on query analysis
-        # Extract key interests from user query
-        interests = []
-        interest_keywords = {
-            "Kultur": ["kultur", "geschichte", "historisch", "museum", "kunst", "architektur"],
-            "Kulinarik": ["essen", "kulinarisch", "gastronomie", "food", "küche", "restaurant", "genuss"],
-            "Strand": ["strand", "meer", "küste", "beach", "schwimmen", "ocean", "wassersport"],
-            "Party": ["party", "nachtleben", "feiern", "club", "bar", "unterhaltung"],
-            "Abenteuer": ["abenteuer", "trekking", "wandern", "aktiv", "sport", "rafting", "klettern"],
-            "Entspannung": ["entspannung", "erholung", "wellness", "spa", "ruhe", "relaxen"]
-        }
+        # Generate the personalized customer email using our dedicated email prompt
+        print("Generating personalized customer email...")
+        email_prompt = self.prompts.get_customer_email_prompt(plan_summary, user_query)
+        email_response = self._rate_limited_generate(self.model, email_prompt)
+        customer_email = email_response.text.strip()
         
-        user_query_lower = user_query.lower()
-        for interest, keywords in interest_keywords.items():
-            if any(keyword in user_query_lower for keyword in keywords):
-                interests.append(interest)
-        
-        if interests:
-            interests_text = ", ".join(interests[:-1]) + " und " + interests[-1] if len(interests) > 1 else interests[0]
-            email += f"Da Sie sich besonders für {interests_text} interessieren, habe ich darauf besonderen Wert gelegt.\n\n"
-        
-        # Address any issues from plausibility check
-        if plausibility_issues:
-            email += "Beim Erstellen Ihres Reiseplans sind mir einige Punkte aufgefallen, die ich gerne mit Ihnen besprechen würde:\n\n"
-            for issue in plausibility_issues[:2]:
-                email += f"- {issue}\n"
-            email += "\n"
-        
-        # Add personal details and questioning
-        email += "Für eine weitere Optimierung Ihres Reiseplans hätte ich noch folgende Fragen:\n\n"
-        
-        # Add considerations or questions
-        if considerations:
-            for consideration in considerations[:2]:
-                email += f"- {consideration}\n"
-        else:
-            # Default questions if no specific considerations found
-            email += "- Haben Sie besondere Vorlieben bei der Unterkunft? (z.B. Meerblick, zentralere Lage oder bestimmte Hotelkategorie)\n"
-            email += "- Gibt es besondere Anlässe, die während Ihrer Reise gefeiert werden sollten?\n"
-        
-        email += "- Benötigen Sie Unterstützung bei Transportmitteln oder speziellen Reservierungen?\n\n"
-        
-        # Concrete next steps
-        email += "Um Ihren Reiseplan zu finalisieren, empfehle ich folgende nächste Schritte:\n\n"
-        
-        if next_steps:
-            for i, step in enumerate(next_steps[:3], 1):
-                email += f"{i}. {step}\n"
-        else:
-            # Default next steps
-            email += "1. Überprüfen Sie den beigefügten Reiseplan und teilen Sie mir mit, ob Sie Änderungen wünschen\n"
-            email += "2. Bestätigen Sie die vorgeschlagenen Unterkünfte, damit wir mit den Reservierungen beginnen können\n"
-            email += "3. Lassen Sie uns einen kurzen Video-Call vereinbaren, um alle Details zu besprechen\n"
-        
-        # Closing
-        email += """
-Ich freue mich darauf, von Ihnen zu hören und Ihre Traumreise zu perfektionieren!
-
-Mit herzlichen Grüßen,
-
-Ihr Reiseberater-Team
-Travel Experts GmbH
-+49 123 456789
-reiseberater@travel-experts.de
-"""
-        
-        # Create the sales agent notes section
-        sales_notes = """
-
-### Sales Agent Notes
-
-#### Offene Fragen und Klärungsbedarf:
-"""
-        
-        # Compile list of questions that need follow-up
+        # Compile list of questions for follow-up
         open_questions = []
         
-        # Add questions from plausibility check
+        # First add any urgent issues from plausibility check
         if plausibility_issues:
             for issue in plausibility_issues:
                 open_questions.append(f"Klären Sie: {issue}")
         
-        # Add considerations
+        # Add considerations that need confirmation
         if considerations:
             for consideration in considerations:
                 if not any(consideration in q for q in open_questions):
@@ -1285,30 +1196,19 @@ reiseberater@travel-experts.de
                 if not any(question in q for q in open_questions):
                     open_questions.append(question)
         
-        # Add open questions to sales notes
-        for i, question in enumerate(open_questions, 1):
-            sales_notes += f"{i}. {question}\n"
-            
-        # Add potential alternative options section
-        sales_notes += """
-#### Alternativen bei Nichtverfügbarkeit:
-1. Alternative Unterkünfte in ähnlicher Preisklasse und Lage recherchieren
-2. Flexible Datumsverschiebung von +/- 2 Tagen für einzelne Reiseabschnitte vorbereiten
-3. Ausweichaktivitäten bei regenbedingten Outdoor-Aktivitäten identifizieren
-"""
+        # Generate sales agent notes
+        print("Generating personalized sales agent notes...")
+        # Format the open questions list for the prompt
+        open_questions_formatted = "\n".join([f"- {q}" for q in open_questions])
+        sales_notes_prompt = self.prompts.get_sales_agent_notes_prompt(plan, user_query, open_questions_formatted)
+        sales_notes_response = self._rate_limited_generate(self.model, sales_notes_prompt)
+        sales_agent_notes = sales_notes_response.text.strip()
         
-        # Add pricing and special arrangements section
-        sales_notes += """
-#### Preisgestaltung & Besondere Arrangements:
-1. Preissensitivität bei Unterkünften beachten - innerhalb der Mittelklasse bleiben
-2. Bei Transportbuchungen auf Direktrouten mit kurzen Wartezeiten achten
-3. Optionale Upgrades für besondere Aktivitäten/Ausflüge vorbereiten
-4. Bei mehreren Reisenden Gruppenbuchungsoptionen für Aktivitäten prüfen
-5. Lokale Feiertage/Festivals während des Reisezeitraums überprüfen und ggf. anpassen
-"""
+        # Combine the email and sales agent notes
+        # Format the result as a completely new document with clear sections
+        result = customer_email + "\n\n## Internal Sales Agent Notes\n\n" + sales_agent_notes
         
-        # Put it all together
-        return email + sales_notes
+        return result
         
     def generate_plan_metadata(self, plan: str, user_query: str, sources: list) -> str:
         """
@@ -1354,50 +1254,8 @@ reiseberater@travel-experts.de
         """
         print("Performing comprehensive semantic analysis of user request...")
         
-        analysis_prompt = f"""
-You are an expert travel query analyzer specializing in deep semantic understanding. Analyze this travel request with extraordinary attention to detail:
-
-"{user_query}"
-
-Create a COMPREHENSIVE structured analysis including ALL of the following categories:
-
-1. TRAVELER PROFILE
-   - Number of travelers (exact or estimated)
-   - Age groups (children, teenagers, adults, seniors)
-   - Relationship dynamics (family, couple, friends, solo)
-   - Special accessibility needs or mobility limitations
-   - Language requirements or preferences
-
-2. TRIP LOGISTICS
-   - Total duration (in days)
-   - Specific timeframes for each location (e.g., "2 days in City X")
-   - Travel sequence (order of destinations)
-   - Transportation preferences (flight, train, rental car, etc.)
-   - Accommodation preferences (hotel types, specific amenities)
-
-3. TRIP MOTIVATIONS & EXPECTATIONS
-   - Primary trip motivation (relaxation, adventure, culture, etc.)
-   - Key themes (beach, food, nightlife, nature, etc.)
-   - Activity preferences (sightseeing, outdoor activities, shopping, etc.)
-   - Special experiences requested (cooking classes, specific attractions)
-   - Must-have elements vs. flexible preferences
-
-4. CONTEXTUAL FACTORS
-   - Budget level (luxury, mid-range, budget, backpacker)
-   - Seasonal considerations
-   - Special occasions (honeymoon, birthday, anniversary)
-   - Prior travel experience to these destinations
-   - Concerns or constraints mentioned
-
-5. LINGUISTIC ANALYSIS
-   - Language of request (English, German, etc.)
-   - Tone and formality level
-   - Degree of specificity (vague vs. detailed)
-   - Emotional undertones (excitement, anxiety, etc.)
-   - Key emphasis words and phrases
-
-Return your analysis as a JSON object with these exact fields. If information for a field isn't explicitly mentioned, make a reasoned inference based on context clues and indicate it's an inference.
-"""
+        # Get the semantic analysis prompt from prompts.py
+        analysis_prompt = self.prompts.get_semantic_analysis_prompt(user_query)
         
         try:
             response = self._rate_limited_generate(self.model, analysis_prompt)

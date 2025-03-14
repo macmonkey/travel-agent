@@ -501,10 +501,10 @@ def main():
                     print_with_typing_effect("Searching knowledge base for relevant information...", speed=0.01)
                     time.sleep(0.5)  # Small pause to let the search happen and show logs
 
-                    # First part - generate the actual plan
+                    # Generate plan and metadata separately
                     print_section_header("Creating Comprehensive Plan")
                     print_with_typing_effect("Step 1/2: Creating comprehensive travel plan...", speed=0.01)
-                    detailed_plan = agent.generate_detailed_plan(prompt_to_process, draft_plan, feedback)
+                    detailed_plan, metadata_report = agent.generate_detailed_plan(prompt_to_process, draft_plan, feedback)
 
                     print_section_header("Detailed Travel Plan")
                     print(Colors.CYAN + detailed_plan + Colors.END)
@@ -516,9 +516,13 @@ def main():
 
             # Save the plan if we should
             if should_save_plan and detailed_plan:
-                # Save the plan with its title - the save_travel_plan function will extract the title
+                # Save the plan with its title - pass both plan and metadata to save_travel_plan
                 print_with_typing_effect("Saving your travel plan...", speed=0.02)
-                saved_files = save_travel_plan(detailed_plan)
+                if 'metadata_report' in locals():
+                    saved_files = save_travel_plan(detailed_plan, metadata_report)
+                else:
+                    # For chat mode or if metadata wasn't generated
+                    saved_files = save_travel_plan(detailed_plan)
 
                 print_section_header("Plan Saved")
                 # Get just the filename part, not the full path, for prettier display
