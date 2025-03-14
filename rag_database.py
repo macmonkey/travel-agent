@@ -182,16 +182,31 @@ class RAGDatabase:
         
         # Process and format the results
         formatted_results = []
+        must_see_results = []  # Special container for must-see items
+        
         if results and results['documents']:
             for i, doc in enumerate(results['documents'][0]):
+                metadata = results['metadatas'][0][i] if results['metadatas'] else {}
+                score = results['distances'][0][i] if results['distances'] else None
+                
                 formatted_result = {
                     'text': doc,
-                    'metadata': results['metadatas'][0][i] if results['metadatas'] else {},
-                    'score': results['distances'][0][i] if results['distances'] else None,
+                    'metadata': metadata,
+                    'score': score,
                 }
-                formatted_results.append(formatted_result)
+                
+                # Check if this document contains MUST SEE information
+                if "has_must_see" in metadata and metadata["has_must_see"] == "yes":
+                    must_see_results.append(formatted_result)
+                    if "location_name" in metadata and metadata["location_name"]:
+                        print(f"⭐ Found MUST SEE information for: {metadata['location_name']}")
+                    else:
+                        print(f"⭐ Found MUST SEE information in document")
+                else:
+                    formatted_results.append(formatted_result)
         
-        return formatted_results
+        # Prioritize must-see content by putting it first in the results
+        return must_see_results + formatted_results
     
     def extract_search_keywords(self, query: str) -> dict:
         """

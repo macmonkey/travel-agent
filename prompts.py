@@ -113,8 +113,9 @@ CRITICAL INSTRUCTIONS:
 2. Create a detailed travel plan that incorporates the user's feedback
 3. You MUST clearly distinguish between information from the knowledge database and your own suggestions
 4. For ANY recommendation that doesn't come directly from the provided travel information, mark it as [EXTERNAL SUGGESTION]
-5. Structure the plan in a professional, easy-to-read format with clear headings
-6. Include the following sections:
+5. ⭐ CRITICAL: Pay special attention to "MUST SEE" or "IMPORTANT" information in the database marked with "IMPORTANT TRAVEL ADVICE" and ALWAYS incorporate these into your plan if they relate to locations mentioned in the plan
+6. Structure the plan in a professional, easy-to-read format with clear headings
+7. Include the following sections:
    - Title: A creative, appealing name for the travel plan (as described above)
    - Original Request: Add the user's original query at the top
    - Executive Summary (brief overview)
@@ -206,8 +207,9 @@ VALIDATION RESULT:
 
         2. You MUST clearly distinguish between information from the knowledge database and your own suggestions
         3. For ANY recommendation that doesn't come directly from the provided travel information, mark it as [EXTERNAL SUGGESTION]
-        4. Structure the plan in a professional, easy-to-read format with clear headings
-        5. Include the following sections in your COMPLETE response - DO NOT refer to "previous responses" or use placeholders:
+        4. ⭐ CRITICAL: Pay special attention to "MUST SEE" or "IMPORTANT" information in the database marked with "IMPORTANT TRAVEL ADVICE" and ALWAYS incorporate these into your plan if they relate to locations mentioned in the plan
+        5. Structure the plan in a professional, easy-to-read format with clear headings
+        6. Include the following sections in your COMPLETE response - DO NOT refer to "previous responses" or use placeholders:
            - Title: A creative, appealing name for the travel plan (as described above)
            - Original Request: Add the user's original query at the top
            - Executive Summary (brief overview)

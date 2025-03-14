@@ -109,8 +109,8 @@ def parse_arguments():
                           help='Skip second keyword extraction API call')
     api_group.add_argument('--minimal-mode', action='store_true',
                           help='Use absolute minimal API calls (2 calls only)')
-    api_group.add_argument('--offline-mode', action='store_true',
-                          help='Skip ALL rate limiting and delays (dangerous, use only when you have private API)')
+    api_group.add_argument('--force-mode', action='store_true',
+                          help='Skip ALL rate limiting and delays for maximum speed (use with caution)')
     api_group.add_argument('--chat-mode', action='store_true',
                           help='Use chat-based plan generation (single API session, greatly reduces rate limit issues)')
     api_group.add_argument('--api-quota', type=int, metavar='NUM',
@@ -201,18 +201,18 @@ def main():
         print_with_typing_effect("    - Advanced evaluation and recommendations", speed=0.01, color=Colors.GREEN)
         print_with_typing_effect("    - NEW: Plausibility check to verify plan logic and request matching", speed=0.01, color=Colors.YELLOW + Colors.BOLD)
     
-    if args.offline_mode:
-        # Offline mode - aggressively skip all rate limiting
-        config.OFFLINE_MODE = True
+    if args.force_mode:
+        # Force mode - aggressively skip all rate limiting
+        config.OFFLINE_MODE = True  # Keep the variable name for compatibility
         config.SKIP_METADATA_GENERATION = True
         config.OPTIMIZE_KEYWORD_EXTRACTION = True
         config.SKIP_DRAFT_PLAN = True
-        print_with_typing_effect("⚠️ OFFLINE MODE ENABLED: Skipping ALL rate limiting", 
+        print_with_typing_effect("⚡ FORCE MODE ENABLED: Maximum speed with NO rate limiting", 
                              speed=0.01, color=Colors.RED + Colors.BOLD)
-        print_with_typing_effect("    - DANGEROUS: May result in API rate limit bans", speed=0.01, color=Colors.RED)
-        print_with_typing_effect("    - Use only if you have a private API key with high quotas", speed=0.01, color=Colors.RED)
+        print_with_typing_effect("    - CAUTION: May use API quota rapidly", speed=0.01, color=Colors.RED)
         print_with_typing_effect("    - All delays and rate limiting disabled", speed=0.01, color=Colors.RED)
-        print_with_typing_effect("    - Fast but risky operation", speed=0.01, color=Colors.RED)
+        print_with_typing_effect("    - Fastest possible operation", speed=0.01, color=Colors.YELLOW)
+        print_with_typing_effect("    - Use with care during heavy usage periods", speed=0.01, color=Colors.RED)
     elif args.minimal_mode:
         # Absolute minimal mode - just 2 API calls
         config.SKIP_METADATA_GENERATION = True

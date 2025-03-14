@@ -221,18 +221,25 @@ def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, 
     plan_title = plan_title.replace("PLAN_METADATA__ANALYSIS", "").strip()
     plan_title = re.sub(r'\s+', ' ', plan_title)  # Remove extra spaces
     
-    # Clean the title for filename use (more aggressively)
-    clean_title = re.sub(r'[^\w\s-]', '', plan_title).strip().replace(' ', '_')
+    # Use full title for display, but create a clean version for filename
+    display_title = plan_title
     
-    # Limit title length for filename
-    if len(clean_title) > 40:
-        clean_title = clean_title[:40]
+    # Create a filename-friendly version (keeping more of the original title)
+    # Still sanitize but less aggressively
+    clean_title = re.sub(r'[<>:"/\\|?*]', '', plan_title)  # Remove illegal filename chars
+    clean_title = re.sub(r'\s+', ' ', clean_title).strip()  # Normalize whitespace
     
-    # Add date
-    date_str = datetime.datetime.now().strftime("%Y%m%d")
+    # Add date - use a more readable date format
+    date_str = datetime.datetime.now().strftime("%Y-%m-%d")
     
-    # Construct a cleaner base filename
-    base_filename = f"{days_prefix}{clean_title}_{date_str}"
+    # Construct an improved base filename that's more readable but still safe
+    # Format: "Title - YYYY-MM-DD"
+    base_filename = f"{clean_title} - {date_str}"
+    
+    # If the filename is still too long for some systems, cap it at 180 chars
+    if len(base_filename) > 180:
+        # Keep the start and end portions for context
+        base_filename = base_filename[:150] + "..." + base_filename[-20:]
     
     # Save as Markdown
     md_path = output_dir / f"{base_filename}.md"
@@ -250,10 +257,11 @@ def save_travel_plan(plan_text: str, destination_name: str = None) -> Dict[str, 
     result = {
         "markdown": str(md_path),
         "txt": str(txt_path),
-        "title": plan_title,
-        "days": days_prefix.replace(" Days - ", "") if days_prefix else None,
+        "title": display_title,  # Use the clean, full title for display
+        "days": days_match.group(1) if 'days_match' in locals() and days_match else None,
         "countries": countries,
-        "filename": base_filename
+        "filename": base_filename,
+        "created": date_str
     }
     
     # Log a nice summary

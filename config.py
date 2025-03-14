@@ -45,8 +45,8 @@ class Config:
         self.OPTIMIZE_KEYWORD_EXTRACTION = False  # Set to True to skip second keyword extraction API call
         self.SKIP_DRAFT_PLAN = False  # Set to True to skip draft plan and go directly to detailed plan
         self.USE_CACHED_KEYWORDS = True  # Use cached keywords for similar queries
-        self.OFFLINE_MODE = False  # Set to True to skip all rate limiting (dangerous!)
-        self.USE_CHAT_MODE = False  # Set to True to use chat-based plan generation
+        self.OFFLINE_MODE = False  # Set to True to skip all rate limiting (now controlled by --force-mode)
+        self.USE_CHAT_MODE = False  # Set to True to use multi-section plan generation
         
         # Validate required environment variables
         self._validate_config()
