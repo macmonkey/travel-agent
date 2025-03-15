@@ -6,6 +6,7 @@ This module contains helper functions used throughout the application.
 import os
 import logging
 import datetime
+import time
 from pathlib import Path
 import re
 import uuid
@@ -406,3 +407,160 @@ def estimate_reading_time(text: str) -> int:
     words = len(text.split())
     minutes = round(words / 225)
     return max(1, minutes)  # Minimum 1 minute
+
+def estimate_tokens(text: str) -> int:
+    """
+    Estimate the number of tokens in a text.
+    
+    Args:
+        text: Text to estimate token count for
+        
+    Returns:
+        Estimated token count
+    """
+    # For Gemini models, we can estimate about 4 characters per token on average
+    # This is a rough approximation since actual tokenization is more complex
+    if not text:
+        return 0
+    
+    char_count = len(text)
+    
+    # Approximate token count
+    approx_tokens = round(char_count / 4)
+    
+    # Adjust for newlines and spaces which often count as separate tokens
+    newlines = text.count('\n')
+    spaces = text.count(' ')
+    
+    # Add additional tokens for structural elements
+    additional_tokens = (newlines + spaces) // 2
+    
+    return approx_tokens + additional_tokens
+
+class TokenTracker:
+    """Class for tracking token usage across API calls."""
+    
+    def __init__(self):
+        """Initialize the token tracker."""
+        self.tokens_used = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0
+        }
+        self.token_usage_by_component = {
+            "keyword_extraction": {"prompt": 0, "completion": 0, "total": 0},
+            "semantic_analysis": {"prompt": 0, "completion": 0, "total": 0},
+            "draft_plan": {"prompt": 0, "completion": 0, "total": 0},
+            "detailed_plan": {"prompt": 0, "completion": 0, "total": 0},
+            "customer_email": {"prompt": 0, "completion": 0, "total": 0},
+            "sales_notes": {"prompt": 0, "completion": 0, "total": 0},
+            "plan_validation": {"prompt": 0, "completion": 0, "total": 0},
+            "plan_metadata": {"prompt": 0, "completion": 0, "total": 0},
+            "context_optimization": {"prompt": 0, "completion": 0, "total": 0}
+        }
+        self.api_calls = []
+        self.tokens_saved = 0
+        
+    def track_usage(self, component: str, prompt: str, completion: str):
+        """
+        Track token usage for a specific API call.
+        
+        Args:
+            component: The component making the API call (keyword_extraction, draft_plan, etc.)
+            prompt: The prompt text sent to the API
+            completion: The completion text returned by the API
+        """
+        prompt_tokens = estimate_tokens(prompt)
+        completion_tokens = estimate_tokens(completion)
+        total_tokens = prompt_tokens + completion_tokens
+        
+        # Update global counters
+        self.tokens_used["prompt_tokens"] += prompt_tokens
+        self.tokens_used["completion_tokens"] += completion_tokens
+        self.tokens_used["total_tokens"] += total_tokens
+        
+        # Update component-specific counters
+        if component in self.token_usage_by_component:
+            self.token_usage_by_component[component]["prompt"] += prompt_tokens
+            self.token_usage_by_component[component]["completion"] += completion_tokens
+            self.token_usage_by_component[component]["total"] += total_tokens
+        
+        # Record call details
+        self.api_calls.append({
+            "timestamp": time.time(),
+            "component": component,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens
+        })
+    
+    def record_tokens_saved(self, saved_tokens: int):
+        """
+        Record tokens saved through context optimization.
+        
+        Args:
+            saved_tokens: Number of tokens saved
+        """
+        self.tokens_saved += saved_tokens
+    
+    def generate_summary(self) -> str:
+        """
+        Generate a summary of token usage.
+        
+        Returns:
+            Formatted summary string
+        """
+        summary = "## Token Usage Summary\n\n"
+        
+        # Overall usage
+        summary += "### Overall Usage\n"
+        summary += f"- **Total Tokens Used**: {self.tokens_used['total_tokens']:,}\n"
+        summary += f"- **Prompt Tokens**: {self.tokens_used['prompt_tokens']:,}\n"
+        summary += f"- **Completion Tokens**: {self.tokens_used['completion_tokens']:,}\n"
+        summary += f"- **Tokens Saved**: {self.tokens_saved:,}\n"
+        summary += f"- **Net Token Usage**: {self.tokens_used['total_tokens'] - self.tokens_saved:,}\n"
+        summary += f"- **Total API Calls**: {len(self.api_calls)}\n\n"
+        
+        # Usage by component
+        summary += "### Usage by Component\n"
+        for component, usage in self.token_usage_by_component.items():
+            if usage["total"] > 0:
+                summary += f"- **{component.replace('_', ' ').title()}**: {usage['total']:,} tokens"
+                summary += f" ({usage['prompt']:,} prompt, {usage['completion']:,} completion)\n"
+        
+        return summary
+    
+    def generate_ascii_chart(self) -> str:
+        """
+        Generate a simple ASCII bar chart of token usage by component.
+        
+        Returns:
+            ASCII chart as a string
+        """
+        chart = "\n### Token Usage Chart\n```\n"
+        
+        # Find the maximum token usage for scaling
+        max_tokens = max([usage["total"] for usage in self.token_usage_by_component.values()])
+        
+        # Skip chart if no tokens used
+        if max_tokens == 0:
+            return ""
+        
+        # Calculate scale factor for a chart width of 40 characters
+        scale = 40 / max_tokens if max_tokens > 0 else 0
+        
+        # Generate the chart
+        for component, usage in self.token_usage_by_component.items():
+            if usage["total"] > 0:
+                # Format component name to fixed width
+                component_name = component.replace('_', ' ').title()[:20].ljust(20)
+                
+                # Calculate bar length
+                bar_length = int(usage["total"] * scale)
+                bar = "█" * bar_length
+                
+                # Add the bar with token count
+                chart += f"{component_name} | {bar} {usage['total']:,}\n"
+        
+        chart += "```\n"
+        return chart

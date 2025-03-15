@@ -8,3 +8,6 @@ python-dotenv>=1.0.0
 pathlib>=1.0.1
 typing>=3.7.4
 tqdm>=4.66.0
+colorama>=0.4.6
+pymilvus>=2.3.0
+numpy>=1.26.0

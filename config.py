@@ -31,8 +31,14 @@ class Config:
         self.GEMINI_MODEL = "gemini-1.5-pro"
         
         # Database configuration
-        self.CHUNK_SIZE = 1000
-        self.CHUNK_OVERLAP = 200
+        self.CHUNK_SIZE = 250  # Reduced from 1000 for smaller chunks
+        self.CHUNK_OVERLAP = 50  # Reduced from 200 for smaller chunks
+        self.USE_MILVUS = False  # Whether to use Milvus/Zilliz Cloud instead of ChromaDB
+        
+        # Milvus/Zilliz configuration
+        self.MILVUS_URI = os.environ.get("MILVUS_URI", "https://in03-56ea31fb714e029.serverless.gcp-us-west1.cloud.zilliz.com")
+        self.MILVUS_TOKEN = os.environ.get("MILVUS_TOKEN", "")
+        self.MILVUS_COLLECTION = "travel_documents"
         
         # Agent configuration
         self.MAX_TOKENS = 8192
@@ -47,6 +53,11 @@ class Config:
         self.USE_CACHED_KEYWORDS = True  # Use cached keywords for similar queries
         self.OFFLINE_MODE = False  # Set to True to skip all rate limiting (now controlled by --force-mode)
         self.USE_CHAT_MODE = False  # Set to True to use multi-section plan generation
+        
+        # RAG optimization settings
+        self.MAX_CONTEXT_TOKENS = 3000  # Maximum number of tokens to include in the context
+        self.ENABLE_CONTEXT_OPTIMIZATION = True  # Enable context optimization to save tokens
+        self.MAX_WORDS_PER_DOCUMENT = 100  # Maximum words to include per document in optimized context (reduced for smaller chunks)
         
         # Validate required environment variables
         self._validate_config()

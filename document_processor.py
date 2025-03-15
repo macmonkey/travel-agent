@@ -464,14 +464,16 @@ class DocumentProcessor:
             elif "city" in line.lower() or "town" in line.lower() or "destination" in line.lower():
                 entities["locations"].append(line)
         
-        # Convert entity lists to strings for ChromaDB compatibility
+        # Convert entity lists to strings for database compatibility
         flattened_entities = {}
         for key, values in entities.items():
             # Join lists into strings with a max length to prevent errors
             if values:
-                flat_value = "; ".join(values[:5])  # Limit to 5 items per category
-                if len(flat_value) > 500:  # Limit string length
-                    flat_value = flat_value[:500] + "..."
+                # Limit to 3 items per category to save space
+                flat_value = "; ".join(values[:3])
+                # Enforce strict 450 char limit (well below 500 limit) to account for any encoding issues
+                if len(flat_value) > 450:
+                    flat_value = flat_value[:450] + "..."
                 flattened_entities[key] = flat_value
             else:
                 flattened_entities[key] = ""

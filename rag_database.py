@@ -588,7 +588,16 @@ class RAGDatabase:
         Returns:
             Concatenated string of relevant document chunks
         """
-        print("Searching with LLM-extracted keywords...")
+        import utils  # Import here to avoid circular import
+        
+        # Use ANSI color codes directly
+        CYAN = '\033[96m'
+        GREEN = '\033[92m'
+        YELLOW = '\033[93m'
+        RED = '\033[91m'
+        RESET = '\033[0m'
+        
+        print(f"{CYAN}🔎 Searching with LLM-extracted keywords...{RESET}")
         
         # First collect all MUST-SEE content related to the query
         must_see_results = []
@@ -670,44 +679,91 @@ class RAGDatabase:
                 seen_texts.add(text_start)
                 unique_results.append(result)
         
-        print(f"Found {len(unique_results)} unique results after deduplication (including {len(must_see_results)} MUST-SEE items)")
+        print(f"{GREEN}✓ Found {len(unique_results)} unique results (including {len(must_see_results)} MUST-SEE items){RESET}")
         
         # If no results found, fall back to regular search
         if not unique_results:
-            print("No results from keyword search, falling back to enhanced search...")
+            print(f"{YELLOW}⚠ No results from keyword search, falling back to enhanced search...{RESET}")
             return self.get_relevant_context(query, n_results)
         
-        # Format results as a single context string
-        context_parts = []
-        
-        # First add a section for MUST-SEE content if any was found
-        must_see_parts = []
-        for i, result in enumerate(must_see_results):
-            source = result['metadata'].get('source', 'Unknown source')
-            filename = result['metadata'].get('filename', 'Unknown file')
-            must_see_parts.append(f"MUST-SEE ITEM {i+1} [FROM DATABASE - MUST-SEE] (Source: {source}, File: {filename}):\n{result['text']}\n")
+        # Check if context optimization is enabled in config
+        if hasattr(self.config, 'ENABLE_CONTEXT_OPTIMIZATION') and self.config.ENABLE_CONTEXT_OPTIMIZATION:
+            # Optimize context by extracting only the most relevant parts
+            optimized_context, original_tokens, optimized_tokens = self.optimize_context(unique_results, query, keywords)
             
-        if must_see_parts:
-            context_parts.append("## IMPORTANT TRAVEL HIGHLIGHTS [FROM DATABASE]\n\n" + "\n".join(must_see_parts))
-        
-        # Then add the rest of the results
-        general_parts = []
-        for i, result in enumerate(unique_results[:n_results]):  # Limit to requested number
-            # Skip if this is already in must_see_parts to avoid duplication
-            text_start = result['text'][:100] if len(result['text']) >= 100 else result['text']
-            if any(text_start in part for part in must_see_parts):
-                continue
+            # Check if the optimized context is below the token limit
+            if optimized_tokens > self.config.MAX_CONTEXT_TOKENS:
+                print(f"{YELLOW}⚠ Optimized context ({optimized_tokens:,} tokens) exceeds the maximum token limit ({self.config.MAX_CONTEXT_TOKENS:,} tokens).{RESET}")
+                print(f"{YELLOW}⚠ Further reducing context to fit within token limit...{RESET}")
                 
-            source = result['metadata'].get('source', 'Unknown source')
-            filename = result['metadata'].get('filename', 'Unknown file')
+                # Calculate how much we need to reduce
+                reduction_factor = self.config.MAX_CONTEXT_TOKENS / optimized_tokens
+                
+                # For smaller chunks, we need to be more aggressive with reduction
+                # Apply a more aggressive reduction factor for smaller chunks
+                adjusted_max_words = int(self.config.MAX_WORDS_PER_DOCUMENT * reduction_factor * 0.8)
+                
+                # Ensure we don't go below a reasonable minimum
+                adjusted_max_words = max(30, adjusted_max_words)
+                
+                print(f"{CYAN}ℹ️ Adjusting maximum words per document from {self.config.MAX_WORDS_PER_DOCUMENT} to {adjusted_max_words}{RESET}")
+                
+                # Save original config
+                temp_config = self.config.MAX_WORDS_PER_DOCUMENT
+                self.config.MAX_WORDS_PER_DOCUMENT = adjusted_max_words
+                
+                # Try optimizing again with reduced word count
+                optimized_context, original_tokens, optimized_tokens = self.optimize_context(unique_results, query, keywords)
+                
+                # Restore original config
+                self.config.MAX_WORDS_PER_DOCUMENT = temp_config
             
-            # Mark content as from the RAG database
-            general_parts.append(f"DOCUMENT {i+1} [FROM DATABASE] (Source: {source}, File: {filename}):\n{result['text']}\n")
-        
-        if general_parts:
-            context_parts.append("## GENERAL TRAVEL INFORMATION [FROM DATABASE]\n\n" + "\n".join(general_parts))
-        
-        return "\n".join(context_parts)
+            # Record tokens saved in token tracker if available
+            tokens_saved = original_tokens - optimized_tokens
+            
+            # If the agent has a token tracker, record the saved tokens
+            # To avoid circular imports, we need to access this via the config
+            if hasattr(self, 'agent') and hasattr(self.agent, 'token_tracker'):
+                self.agent.token_tracker.record_tokens_saved(tokens_saved)
+            elif hasattr(self.config, '_token_tracker'):
+                self.config._token_tracker.record_tokens_saved(tokens_saved)
+            
+            return optimized_context
+        else:
+            # If optimization is disabled, use the traditional approach
+            print(f"{YELLOW}Context optimization is disabled. Using full document content.{RESET}")
+            
+            # Format results as a single context string
+            context_parts = []
+            
+            # First add a section for MUST-SEE content if any was found
+            must_see_parts = []
+            for i, result in enumerate(must_see_results):
+                source = result['metadata'].get('source', 'Unknown source')
+                filename = result['metadata'].get('filename', 'Unknown file')
+                must_see_parts.append(f"MUST-SEE ITEM {i+1} [FROM DATABASE - MUST-SEE] (Source: {source}, File: {filename}):\n{result['text']}\n")
+                
+            if must_see_parts:
+                context_parts.append("## IMPORTANT TRAVEL HIGHLIGHTS [FROM DATABASE]\n\n" + "\n".join(must_see_parts))
+            
+            # Then add the rest of the results
+            general_parts = []
+            for i, result in enumerate(unique_results[:n_results]):  # Limit to requested number
+                # Skip if this is already in must_see_parts to avoid duplication
+                text_start = result['text'][:100] if len(result['text']) >= 100 else result['text']
+                if any(text_start in part for part in must_see_parts):
+                    continue
+                    
+                source = result['metadata'].get('source', 'Unknown source')
+                filename = result['metadata'].get('filename', 'Unknown file')
+                
+                # Mark content as from the RAG database
+                general_parts.append(f"DOCUMENT {i+1} [FROM DATABASE] (Source: {source}, File: {filename}):\n{result['text']}\n")
+            
+            if general_parts:
+                context_parts.append("## GENERAL TRAVEL INFORMATION [FROM DATABASE]\n\n" + "\n".join(general_parts))
+            
+            return "\n".join(context_parts)
         
     def get_source_documents(self, query: str, n_results: int = 5) -> list:
         """
@@ -770,3 +826,211 @@ class RAGDatabase:
                         sources.append(filename)
         
         return sources
+        
+    def optimize_context(self, documents: list, query: str, keywords: dict) -> tuple:
+        """
+        Optimize the context by extracting only the most relevant parts of each document.
+        
+        Args:
+            documents: List of document dictionaries
+            query: Original user query
+            keywords: Dictionary of keywords extracted by LLM
+            
+        Returns:
+            Tuple of (optimized_context, original_token_count, optimized_token_count)
+        """
+        import utils  # Import here to avoid circular import
+        
+        # Use ANSI color codes directly
+        CYAN = '\033[96m'
+        GREEN = '\033[92m'
+        YELLOW = '\033[93m'
+        RED = '\033[91m'
+        RESET = '\033[0m'
+        
+        print(f"\n{CYAN}🔍 Optimizing RAG context for more efficient processing...{RESET}")
+        
+        # Collect all extracted keywords for relevance scoring
+        all_keywords = []
+        
+        # Add locations (highest priority)
+        if 'locations' in keywords:
+            all_keywords.extend([(location.lower(), 3.0) for location in keywords.get('locations', [])])
+            
+        # Add themes (medium-high priority)
+        if 'themes' in keywords:
+            all_keywords.extend([(theme.lower(), 2.0) for theme in keywords.get('themes', [])])
+            
+        # Add activities (medium priority)
+        if 'activities' in keywords:
+            all_keywords.extend([(activity.lower(), 1.5) for activity in keywords.get('activities', [])])
+            
+        # Add accommodation types (medium-low priority)
+        if 'accommodation_types' in keywords:
+            all_keywords.extend([(acc_type.lower(), 1.2) for acc_type in keywords.get('accommodation_types', [])])
+        
+        # Add general keywords (low priority)
+        if 'general' in keywords:
+            all_keywords.extend([(keyword.lower(), 1.0) for keyword in keywords.get('general', [])])
+            
+        # Process each document and extract the most relevant paragraphs
+        optimized_documents = []
+        original_word_count = 0
+        optimized_word_count = 0
+        
+        for doc in documents:
+            original_text = doc['text']
+            original_word_count += len(original_text.split())
+            
+            # Split document into paragraphs
+            paragraphs = [p.strip() for p in original_text.split('\n\n') if p.strip()]
+            
+            # If it's not many paragraphs already, try splitting by newlines
+            if len(paragraphs) <= 2:
+                paragraphs = [p.strip() for p in original_text.split('\n') if p.strip()]
+            
+            # Score each paragraph based on keyword relevance
+            scored_paragraphs = []
+            
+            for paragraph in paragraphs:
+                if not paragraph or len(paragraph.split()) < 5:  # Skip very short paragraphs
+                    continue
+                    
+                # Convert to lowercase for matching
+                paragraph_lower = paragraph.lower()
+                
+                # Initialize score
+                score = 0.0
+                
+                # Check for MUST-SEE content (highest priority)
+                if "must-see" in paragraph_lower or "must see" in paragraph_lower:
+                    score += 5.0
+                    
+                # Score based on keywords
+                for keyword, weight in all_keywords:
+                    if keyword in paragraph_lower:
+                        # Add the weight for each occurrence of the keyword
+                        occurrences = paragraph_lower.count(keyword)
+                        score += weight * occurrences
+                
+                # Bonus for first paragraph (often contains summary information)
+                if paragraph == paragraphs[0]:
+                    score += 1.0
+                    
+                # Small bonus for paragraphs with reasonable length (adjusted for smaller chunks)
+                words = len(paragraph.split())
+                if 10 <= words <= 50:
+                    score += 0.8  # Higher bonus for appropriately sized paragraphs
+                    
+                scored_paragraphs.append((paragraph, score, words))
+            
+            # Sort paragraphs by score in descending order
+            scored_paragraphs.sort(key=lambda x: x[1], reverse=True)
+            
+            # Calculate target word count for this document
+            max_words = self.config.MAX_WORDS_PER_DOCUMENT
+            
+            # Select top paragraphs up to the word limit
+            selected_paragraphs = []
+            current_word_count = 0
+            
+            for paragraph, score, words in scored_paragraphs:
+                if current_word_count + words <= max_words or not selected_paragraphs:
+                    selected_paragraphs.append(paragraph)
+                    current_word_count += words
+                else:
+                    # If we can't add more paragraphs, break the loop
+                    break
+            
+            # If the document has MUST-SEE content, make sure it's explicitly marked
+            has_must_see = doc['metadata'].get('has_must_see', 'no') == 'yes'
+            
+            # Create optimized text by joining selected paragraphs
+            optimized_text = "\n\n".join(selected_paragraphs)
+            
+            # Add a summary line if the text was significantly reduced
+            original_tokens = utils.estimate_tokens(original_text)
+            optimized_tokens = utils.estimate_tokens(optimized_text)
+            
+            if has_must_see:
+                # Add a clear marker for MUST-SEE content at the beginning
+                optimized_text = f"🌟 MUST-SEE CONTENT 🌟\n\n{optimized_text}"
+                
+                # Also add a special tag for the LLM to recognize in the plan
+                optimized_text += "\n\n[THIS IS MUST-SEE CONTENT THAT SHOULD BE TAGGED WITH [FROM DATABASE - MUST-SEE] IN THE PLAN]"
+            
+            # If the document was significantly reduced, add a note
+            if original_tokens > optimized_tokens * 1.5:
+                reduction = (1 - (optimized_tokens / original_tokens)) * 100
+                optimized_text += f"\n\n[Note: This is an optimized extract (reduced by {reduction:.0f}%) from a larger document]"
+            
+            # Create optimized document with original metadata
+            optimized_doc = {
+                'text': optimized_text,
+                'metadata': doc['metadata'],
+                'score': doc.get('score', 0),
+                'original_tokens': original_tokens,
+                'optimized_tokens': optimized_tokens
+            }
+            
+            optimized_documents.append(optimized_doc)
+            optimized_word_count += len(optimized_text.split())
+            
+            # Print progress with colored output
+            if has_must_see:
+                print(f"{YELLOW}🌟 Optimized MUST-SEE document: {doc['metadata'].get('filename', 'Unknown')}{RESET}")
+            else:
+                print(f"{GREEN}✓ Optimized document: {doc['metadata'].get('filename', 'Unknown')}{RESET}")
+                
+            reduction_pct = (1 - (optimized_tokens / original_tokens)) * 100 if original_tokens > 0 else 0
+            print(f"  - Reduced from {original_tokens:,} to {optimized_tokens:,} tokens ({reduction_pct:.1f}% saving)")
+        
+        # Calculate token counts
+        original_token_count = utils.estimate_tokens("\n\n".join([doc['text'] for doc in documents]))
+        
+        # Format optimized context as a single string
+        optimized_context_parts = []
+        
+        # First add a section for MUST-SEE content if any was found
+        must_see_parts = []
+        for i, doc in enumerate([d for d in optimized_documents if d['metadata'].get('has_must_see', 'no') == 'yes']):
+            source = doc['metadata'].get('source', 'Unknown source')
+            filename = doc['metadata'].get('filename', 'Unknown file')
+            must_see_parts.append(f"MUST-SEE ITEM {i+1} [FROM DATABASE - MUST-SEE] (Source: {source}, File: {filename}):\n{doc['text']}\n")
+            
+        if must_see_parts:
+            optimized_context_parts.append("## IMPORTANT TRAVEL HIGHLIGHTS [FROM DATABASE]\n\n" + "\n".join(must_see_parts))
+        
+        # Then add the rest of the results
+        general_parts = []
+        for i, doc in enumerate([d for d in optimized_documents if d['metadata'].get('has_must_see', 'no') != 'yes']):
+            # Skip if this is already in must_see_parts to avoid duplication
+            if any(doc['text'][:100] in part for part in must_see_parts):
+                continue
+                
+            source = doc['metadata'].get('source', 'Unknown source')
+            filename = doc['metadata'].get('filename', 'Unknown file')
+            
+            # Mark content as from the RAG database
+            general_parts.append(f"DOCUMENT {i+1} [FROM DATABASE] (Source: {source}, File: {filename}):\n{doc['text']}\n\n[THIS INFORMATION SHOULD BE TAGGED WITH [FROM DATABASE] WHEN USED IN THE PLAN]\n")
+        
+        if general_parts:
+            optimized_context_parts.append("## GENERAL TRAVEL INFORMATION [FROM DATABASE]\n\n" + "\n".join(general_parts))
+        
+        optimized_context = "\n".join(optimized_context_parts)
+        optimized_token_count = utils.estimate_tokens(optimized_context)
+        
+        # Calculate and report savings
+        tokens_saved = original_token_count - optimized_token_count
+        tokens_saved_pct = (tokens_saved / original_token_count) * 100 if original_token_count > 0 else 0
+        
+        print(f"\n{CYAN}📊 RAG Context Optimization Summary:{RESET}")
+        print(f"  - Original documents: {len(documents)}")
+        print(f"  - Original tokens: {original_token_count:,}")
+        print(f"  - Optimized tokens: {optimized_token_count:,}")
+        print(f"  - Tokens saved: {tokens_saved:,} ({tokens_saved_pct:.1f}%)")
+        print(f"  - Original word count: {original_word_count:,}")
+        print(f"  - Optimized word count: {optimized_word_count:,}")
+        print(f"  - Word reduction: {original_word_count - optimized_word_count:,} words ({(original_word_count - optimized_word_count) / original_word_count * 100:.1f}%)\n")
+        
+        return optimized_context, original_token_count, optimized_token_count

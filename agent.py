@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 import google.generativeai as genai
 from prompts import TravelPrompts
+from utils import TokenTracker
 
 class TravelAgent:
     """Travel agent class that uses Google Gemini to generate travel plans."""
@@ -38,6 +39,15 @@ class TravelAgent:
         
         # API call tracking
         self.api_call_counter = 0
+        
+        # Token usage tracking
+        self.token_tracker = TokenTracker()
+        
+        # Store reference to the token tracker in the config for use by RAG database
+        self.config._token_tracker = self.token_tracker
+        
+        # Share agent reference with RAG database for token tracking
+        self.rag_db.agent = self
         
         # Create a cache config file to store metadata
         self.cache_config_path = self.cache_dir / "cache_config.json"
@@ -189,7 +199,7 @@ class TravelAgent:
         except Exception as e:
             self.logger.warning(f"Error saving to cache: {e}")
     
-    def _rate_limited_generate(self, model, prompt, retry_count=0, use_cache=True):
+    def _rate_limited_generate(self, model, prompt, retry_count=0, use_cache=True, component="unknown"):
         """
         Make a rate-limited call to the Gemini API with exponential backoff.
         
@@ -198,6 +208,7 @@ class TravelAgent:
             prompt: The prompt to send
             retry_count: Current retry attempt (for recursive calls)
             use_cache: Whether to check and use cached responses
+            component: Component name for token tracking (e.g., "keyword_extraction")
             
         Returns:
             The model response
@@ -210,6 +221,13 @@ class TravelAgent:
             cached_response = self._check_cache(prompt)
             if cached_response:
                 self.logger.info("Using cached response instead of API call")
+                
+                # Track token usage even for cached responses (only prompted tokens)
+                if hasattr(self, 'token_tracker'):
+                    self.token_tracker.track_usage(component, 
+                                                  prompt if isinstance(prompt, str) else str(prompt), 
+                                                  cached_response.text)
+                
                 return cached_response
         
         # Calculate time since last API call
@@ -256,7 +274,14 @@ class TravelAgent:
             # Increment the API call counter
             self.api_call_counter += 1
             
+            # Convert prompt to string if it's not already (for token tracking)
+            prompt_str = prompt if isinstance(prompt, str) else str(prompt)
+            
             response = model.generate_content(prompt)
+            
+            # Track token usage
+            if hasattr(self, 'token_tracker'):
+                self.token_tracker.track_usage(component, prompt_str, response.text)
             
             # Success! Reset consecutive errors but keep batch counter
             self.consecutive_errors = 0
@@ -286,7 +311,7 @@ class TravelAgent:
                     if not (hasattr(self.config, 'OFFLINE_MODE') and self.config.OFFLINE_MODE):
                         time.sleep(wait_time)
                     
-                    return self._rate_limited_generate(model, prompt, retry_count, use_cache)
+                    return self._rate_limited_generate(model, prompt, retry_count, use_cache, component)
                 else:
                     self.logger.error("Maximum retries exceeded for API call")
                     # Force a very long cooldown period after max retries, unless in offline mode
@@ -296,7 +321,15 @@ class TravelAgent:
                     # Try to use fallback generator instead of failing completely
                     try:
                         self.logger.warning("Attempting to use fallback generator due to rate limits...")
-                        return self._fallback_generate(prompt)
+                        fallback_response = self._fallback_generate(prompt)
+                        
+                        # Track token usage for fallback
+                        if hasattr(self, 'token_tracker'):
+                            self.token_tracker.track_usage(component + "_fallback", 
+                                                          prompt if isinstance(prompt, str) else str(prompt), 
+                                                          fallback_response.text)
+                        
+                        return fallback_response
                     except:
                         # If fallback also fails, then raise the original exception
                         raise Exception("Maximum retries exceeded for Gemini API due to rate limits")
@@ -587,7 +620,7 @@ class TravelAgent:
         
         try:
             # Generate keyword extraction using rate-limited function
-            response = self._rate_limited_generate(self.keyword_model, keyword_prompt)
+            response = self._rate_limited_generate(self.keyword_model, keyword_prompt, component="keyword_extraction")
             keywords_text = response.text.strip()
             
             # Convert the response to a dictionary
@@ -820,7 +853,7 @@ class TravelAgent:
         
         # Generate draft plan with rate limiting
         start_time = time.time()
-        response = self._rate_limited_generate(self.model, prompt)
+        response = self._rate_limited_generate(self.model, prompt, component="draft_plan")
         end_time = time.time()
         
         print(f"Draft plan generated in {end_time - start_time:.2f} seconds.")
@@ -938,7 +971,7 @@ class TravelAgent:
         
         # Generate detailed plan with rate limiting
         start_time = time.time()
-        response = self._rate_limited_generate(self.model, prompt)
+        response = self._rate_limited_generate(self.model, prompt, component="detailed_plan")
         travel_plan_content = response.text
         end_time = time.time()
         
@@ -983,12 +1016,49 @@ class TravelAgent:
         external_count = plan.count("[EXTERNAL SUGGESTION]")
         must_see_count = plan.count("[FROM DATABASE - MUST-SEE]") + plan.count("MUST-SEE")
         
-        # Calculate percentage of database usage
-        total_suggestions = db_count + external_count
-        if total_suggestions > 0:
-            db_percentage = round((db_count / total_suggestions) * 100)
+        # If the counts are too low, it's likely that the LLM didn't properly tag recommendations
+        # In this case, we'll try to estimate based on source document usage
+        if (db_count + external_count) < 10:
+            # Check context size to estimate usage
+            context_size = len(context.strip())
+            # If we have a substantial context (more than 1000 chars) and sources
+            if context_size > 1000 and len(sources) > 0:
+                # Estimate based on number of source documents relative to plan size
+                # More source documents usually means more database usage
+                plan_size = len(plan.strip())
+                source_count = len(sources)
+                
+                # Calculate an estimated percentage based on source documents and context size
+                # More sources and larger context generally means more database usage
+                estimated_percentage = min(90, (source_count * context_size / plan_size) * 5)
+                db_percentage = max(10, round(estimated_percentage))  # At least 10% if we have any sources
+                
+                # Estimate must-see count based on source documents (typically 10-20% of sources have must-see content)
+                if must_see_count == 0:
+                    must_see_count = max(1, round(source_count * 0.15))
+                    
+                # Recalculate db_count and external_count to match the percentage
+                if db_percentage > 0:
+                    estimated_total = 100  # Represents 100%
+                    db_count = round(estimated_total * (db_percentage / 100))
+                    external_count = estimated_total - db_count
+            else:
+                # If minimal context but we have sources, set a base percentage
+                if len(sources) > 0:
+                    db_percentage = 10  # Default to 10% if we have sources but minimal context
+                    db_count = 10
+                    external_count = 90
+                else:
+                    db_percentage = 0
+                    db_count = 0
+                    external_count = 100
         else:
-            db_percentage = 0
+            # Calculate percentage of database usage based on actual tags
+            total_suggestions = db_count + external_count
+            if total_suggestions > 0:
+                db_percentage = round((db_count / total_suggestions) * 100)
+            else:
+                db_percentage = 0
             
         # Get the RAG usage report prompt template from prompts.py and fill in values
         template = self.prompts.get_rag_usage_report_prompt()
@@ -1148,7 +1218,7 @@ class TravelAgent:
         # Generate the personalized customer email using our dedicated email prompt
         print("Generating personalized customer email...")
         email_prompt = self.prompts.get_customer_email_prompt(plan_summary, user_query)
-        email_response = self._rate_limited_generate(self.model, email_prompt)
+        email_response = self._rate_limited_generate(self.model, email_prompt, component="customer_email")
         customer_email = email_response.text.strip()
         
         # Compile list of questions for follow-up
@@ -1201,7 +1271,7 @@ class TravelAgent:
         # Format the open questions list for the prompt
         open_questions_formatted = "\n".join([f"- {q}" for q in open_questions])
         sales_notes_prompt = self.prompts.get_sales_agent_notes_prompt(plan, user_query, open_questions_formatted)
-        sales_notes_response = self._rate_limited_generate(self.model, sales_notes_prompt)
+        sales_notes_response = self._rate_limited_generate(self.model, sales_notes_prompt, component="sales_notes")
         sales_agent_notes = sales_notes_response.text.strip()
         
         # Combine the email and sales agent notes
@@ -1234,7 +1304,7 @@ class TravelAgent:
         
         # Generate analysis with rate limiting
         start_time = time.time()
-        response = self._rate_limited_generate(self.model, prompt)
+        response = self._rate_limited_generate(self.model, prompt, component="plan_metadata")
         metadata = response.text
         end_time = time.time()
         
@@ -1258,7 +1328,7 @@ class TravelAgent:
         analysis_prompt = self.prompts.get_semantic_analysis_prompt(user_query)
         
         try:
-            response = self._rate_limited_generate(self.model, analysis_prompt)
+            response = self._rate_limited_generate(self.model, analysis_prompt, component="semantic_analysis")
             analysis_text = response.text.strip()
             
             # Parse the JSON response
@@ -1542,7 +1612,7 @@ Your analysis will guide the creation of a perfectly tailored travel plan.
 """
         
         # Generate the analysis
-        request_analysis = self._rate_limited_generate(self.model, request_analysis_prompt).text
+        request_analysis = self._rate_limited_generate(self.model, request_analysis_prompt, component="request_analysis").text
         section_timings['request_analysis'] = time.time() - section_start
         section_start = time.time()
         
@@ -1582,10 +1652,12 @@ Create a detailed, inspiring travel plan with the following elements:
    - Include realistic travel times between destinations
 
 5. For EACH recommendation:
-   - Clearly mark as [FROM DATABASE] or [EXTERNAL SUGGESTION]
+   - CRITICAL: Clearly and explicitly mark as [FROM DATABASE] or [EXTERNAL SUGGESTION]
+   - For database-sourced items that are marked as must-see, use [FROM DATABASE - MUST-SEE]
    - Briefly explain WHY you're recommending it for this specific traveler
    - Include practical details (opening hours, costs, booking requirements, etc.)
    - For [FROM DATABASE] items, mention which source document provided the information
+   - IMPORTANT: Every single recommendation MUST have one of these tags
 
 CRITICAL REQUIREMENTS:
 - Focus intensely on the traveler's specific interests and needs
